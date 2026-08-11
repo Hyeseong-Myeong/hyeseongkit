@@ -8,6 +8,7 @@ deploy/bridge-dat/          # livesync-bridge config.json (CouchDB 자격증명 
 .hyeseongkit/
 HYESEONGKIT.md
 
+# Local scratch files (never commit — may contain personal network/infra info)
 # 세션 인계 문서 — 매 세션 갱신되는 작업 상태. 기획/설계서와 달리 커밋 이력에 남길 근거가 없다
 tmp/
 
