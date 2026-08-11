@@ -31,7 +31,8 @@
 |---|---|
 | [기획서](docs/session_persistence_design.md) | 왜 만드는가, 무엇을 만드는가, 어떤 선택을 왜 했는가, 결정·위험 이력 |
 | [설계서](docs/session_persistence_impl_spec.md) | API·MCP·DB 스키마·인증·마스킹·렌더러·배포·CI/CD |
-| [세션 인계 문서](docs/session_handoff.md) | 이 시스템이 만들려는 산출물의 손으로 쓴 견본 (Phase 0 검증 대상) |
+
+세션 간 작업 인계 문서(이 시스템이 만들려는 산출물의 손으로 쓴 견본, Phase 0 검증 대상)는 `tmp/session_handoff.md`에 있다 — 매 세션 갱신되는 작업 상태라 커밋하지 않는다(`.gitignore`).
 
 ## 설계 원칙
 

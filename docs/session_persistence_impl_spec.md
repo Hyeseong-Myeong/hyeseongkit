@@ -1,7 +1,7 @@
 # 🛠 hyeseongkit 세션 영속화 — 구현 설계서
 
 > 상위 문서(기획서): [`session_persistence_design.md`](session_persistence_design.md) — 결정의 배경·대안 비교는 전부 그쪽 참조
-> 기준일: 2026-08-11 · 버전: v1
+> 기준일: 2026-08-11 · 버전: v1.6
 > **완료 기준: 구현자가 이 문서만 보고 만들 수 있는가** (기획서 P-0)
 
 ## 개정 이력
