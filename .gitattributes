@@ -1,0 +1,5 @@
+# 문서 규약: UTF-8(BOM 없음) + LF (기획서 §4-5, 설계서 §6-3)
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.png binary
+*.jpg binary

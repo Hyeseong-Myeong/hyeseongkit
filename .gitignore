@@ -1,0 +1,20 @@
+# 시크릿·기기 고유값 — 저장소에 절대 들어가지 않는다 (D28, 설계서 §0-3-1)
+.env
+.env.*
+!.env.example
+deploy/bridge-dat/          # livesync-bridge config.json (CouchDB 자격증명 포함)
+
+# hyeseongkit 산출물 (D20/F2 — 전부 비커밋)
+.hyeseongkit/
+HYESEONGKIT.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
