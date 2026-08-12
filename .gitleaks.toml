@@ -1,0 +1,30 @@
+# gitleaks 설정 (CI §14-3의 secret-scan job과 로컬 preflight가 함께 사용)
+#
+# 이 저장소에는 마스킹 규칙(설계서 §6)을 검증하는 **합성 시크릿**이 있다.
+# 실제 자격증명이 아니지만 형식이 진짜와 같아야 규칙을 검증할 수 있으므로,
+# 그 자리들만 좁게 예외 처리한다. 예외는 "왜 안전한가"를 적지 않으면 추가하지 않는다.
+
+title = "hyeseongkit"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = """
+마스킹 테스트 픽스처. 이 두 파일은 §6-5 테스트 벡터를 담기 위해 존재하며,
+값은 전부 사람이 지어낸 문자열이다(AKIAABC..., sk-abcdef..., BEGIN RSA .../abc).
+⚠️ 그래서 이 파일들에는 실제 자격증명을 절대 넣지 않는다 — 스캐너가 봐주지 않는다.
+"""
+paths = [
+  '''tests/test_redact\.py''',
+  '''tests/test_api\.py''',
+]
+
+[[allowlists]]
+description = "설계서 §6-5 테스트 벡터 표에 실린 같은 합성 문자열"
+regexes = [
+  '''sk-abcdefghijklmnopqrstuvwx''',
+  '''eyJhbGciOi\.eyJzdWIi\.SflKxwRJ''',
+  '''user:pass1234@nas\.local''',
+  '''api_key=abcdefgh1234''',
+]
