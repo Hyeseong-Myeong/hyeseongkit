@@ -1,0 +1,34 @@
+# NAS Jenkins — hyeseongkit 배포 트리거 (설계서 §14-4-1)
+#
+# 이 파일은 <JENKINS_DIR>/ 에 두고 실행한다. hyeseongkit 허브의 compose와는 별개다
+# (Jenkins는 허브의 수명주기와 무관하게 떠 있어야 배포·롤백을 할 수 있다).
+#
+# 설치 순서와 확인 방법은 docs/nas_deploy_runbook.md 참조.
+# .env에 넣을 값: GHCR_OWNER, JENKINS_PORT, JENKINS_HOME_DIR, DEPLOY_DIR, DOCKER_GID
+
+services:
+  jenkins:
+    image: ghcr.io/${GHCR_OWNER}/hyeseongkit-jenkins:latest
+    container_name: hyeseongkit-jenkins
+    ports:
+      # ⚠️ Jenkins는 docker.sock을 쥐고 있어 사실상 호스트 root 권한이다 (설계서 §14-4-2).
+      #    가장 실효적인 방어는 "닿을 수 없게 하는 것" — JENKINS_BIND를 사설망(Tailscale)
+      #    인터페이스 주소로 지정하면 LAN·공인망에서 접근 자체가 불가능해진다.
+      #    에이전트 포트(50000)는 열지 않는다 — 에이전트를 쓰지 않음
+      - "${JENKINS_BIND:-0.0.0.0}:${JENKINS_PORT}:8080"
+    volumes:
+      - ${JENKINS_HOME_DIR}:/var/jenkins_home
+      # DooD — 호스트 데몬을 조종한다 (§14-4-1 전제 1)
+      - /var/run/docker.sock:/var/run/docker.sock
+      # ⚠️ 배포 디렉터리는 반드시 "호스트와 동일한 경로"로 마운트한다 (§14-4-1 전제 3).
+      #    compose가 bind mount 경로와 프로젝트 이름을 호스트 기준으로 해석하기 때문에,
+      #    경로가 다르면 사람이 실행할 때와 다른 볼륨을 쓰게 된다.
+      - ${DEPLOY_DIR}:${DEPLOY_DIR}
+    group_add:
+      - "${DOCKER_GID}"              # stat -c '%g' /var/run/docker.sock 의 값 (U8 — 실측 필요)
+    environment:
+      # 2코어 보호: 힙 상한을 명시하고, 배포 job만 돌리므로 실행기 2개면 충분
+      JAVA_OPTS: "-Xmx512m -Djava.awt.headless=true -Dhudson.model.LoadStatistics.clock=60000"
+    restart: unless-stopped
+    cpus: 1.0                        # 제약 L4 — 폭주가 CouchDB를 굶기지 않게
+    mem_limit: 1g
