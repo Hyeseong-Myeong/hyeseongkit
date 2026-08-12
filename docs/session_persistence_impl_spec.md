@@ -1,7 +1,8 @@
 # 🛠 hyeseongkit 세션 영속화 — 구현 설계서
 
 > 상위 문서(기획서): [`session_persistence_design.md`](session_persistence_design.md) — 결정의 배경·대안 비교는 전부 그쪽 참조
-> 기준일: 2026-08-11 · 버전: v1.6
+> 운영 절차서: [`nas_deploy_runbook.md`](nas_deploy_runbook.md) — NAS Jenkins 설치·배포 실행 순서 (이 문서는 "무엇을", 런북은 "어떤 순서로")
+> 기준일: 2026-08-12 · 버전: v1.7
 > **완료 기준: 구현자가 이 문서만 보고 만들 수 있는가** (기획서 P-0)
 
 ## 개정 이력
@@ -15,6 +16,7 @@
 | v1.4 | **검토 피드백 F1~F4·C1~C5 반영** — F1(a) know 이월 보존(§2-4) / F2 어댑터를 기기 단위 `hk setup`으로 재설계, 산출물 전부 비커밋, U4 해소(§9~§10) / F3 CouchDB 백업 정책 신설(§12-4) / F4 계정 분리 절차(§12-3) / C1 canonical aliases(§7) / C2 MK08 오탐 축소(§6) / C3 CodeQL+로컬 lint(§14) / C4 resume 패킷에 활성 스레드 목록(§3-7) / C5 방화벽은 추후 반영 명기(§1) | 2026-08-11 사용자 회신 |
 | v1.5 | **C1 보강 — `hk link` 수동 매칭 신설** (사용자 제안 채택): 개명·오분기 시 기존 프로젝트에 수동 연결 + `hk init` 오분기 방지 가드. `hk init --rename`은 `hk link`로 통합 (§7, §3-2, §11-2) | 2026-08-11 사용자 회신: *"수동으로 기존 세션과 매칭할 수 있는 기능"* |
 | v1.6 | **D26 재결정 → (D) 러너 없음·NAS 수동 배포** (§14-1-1 (D), §14-3~14-6 재작성, deploy job 제거) / **D28 플레이스홀더 규약 신설**(§0-3-1) 및 문서 전반 고유값 치환 / `.env.example` 재편(§12-2) / 외부 기여 정책(§14-8) / 수용 기준 T11~T13 갱신 | 2026-08-11 사용자 회신: self-hosted 러너 미사용 + 민감정보 `.env` 이전 |
+| **v1.7** | **초기 구현(P1~P3) 반영 — 스펙 델타 16건(§0-5).** ① `slug` 필드 + 409 `THREAD_EXISTS`(D30) ② D29 암호화에 `title` 포함·`enc` 블록 확정 ③ evt `ord` 필드 ④ 쓰기 후 **뷰 즉시 fold**(렌더는 계속 비동기) ⑤ 마스킹 `re.ASCII` ⑥ §6-5 벡터 표기 정정 ⑦ `GET /v1/projects` 목록·`name` 검색 ⑧ `mask_report` 전달 ⑨ `hk init --force-new` ⑩ 훅 모드 큐 flush 생략 ⑪ MCP SDK 2.0 ⑫ 허브 MCP도 치환 마스킹 ⑬ `~/.hyeseongkit/config.toml` 전문 ⑭ `HK_DEVICE_ID`/`HK_TOOL` 키 ⑮ bridge P4 이연 ⑯ 저장 인터페이스 확장 **⑰ DB·인덱스 생성 권한** **⑱ 허브↔CouchDB 전용 네트워크**(⑰·⑱은 배포를 막던 결함) **⑲ `docker.sock` 위협·완화 명문화** **⑳ push 전 검사 스크립트·gitleaks 설정**. **§14-4~14-6을 NAS Jenkins 수동 트리거로 재작성**(D26 갱신), `deploy/jenkins/` 신설, 런북 분리 | 2026-08-12 구현 세션 + 사용자 회신 (스레드 ID·title 암호화·bridge 이연·Jenkins 3항·네트워크 방식·docker.sock 정리 지시) |
 
 ## 0. 범위와 전제
 
@@ -57,26 +59,39 @@ HTTP API · MCP 도구 · CouchDB 스키마 · 인증 흐름 · 마스킹 규칙
 | §10 **P8 모바일 커넥터**(Funnel/Tunnel + OAuth) | D9 미결 + 공개 HTTPS 노출은 별도 보안 검토 대상 | P8 (착수 미정) |
 | §11 **D8 볼트 E2E 암호화** | LiveSync 설정 변경이라 이 시스템 밖의 결정. 단 §0-2-2의 SSOT 암호화 쟁점과 함께 봐야 한다 | P4 전 |
 
-### 0-2-2. ⚠️ 미해결 설계 쟁점 — SSOT 저장 시 암호화 (2026-08-11 신설)
+### 0-2-2. ✅ D29 해결됨 — SSOT 저장 시 암호화 (2026-08-11 신설, 2026-08-11 확정)
 
-기획서 R2는 **볼트**의 평문 저장(`encrypt=false`)을 다루지만, 이 설계가 새로 만드는 **`hyeseongkit_sessions`(SSOT) 역시 CouchDB에 평문으로 저장**된다. 세션 본문에는 `career`/`personal` 민감도 내용이 들어갈 수 있다.
+**결정: (a) 필드 단위 암호화 — 전 세션 대상** (민감도 무관하게 모든 세션 본문을 암호화 저장).
 
-| 현재 방어선 | 남는 위험 |
+기획서 R2는 **볼트**의 평문 저장(`encrypt=false`)을 다루지만, `hyeseongkit_sessions`(SSOT) 역시 CouchDB에 저장된다. 세션 본문에는 `career`/`personal` 민감도 내용이 들어갈 수 있으므로, **모든 세션의 본문 필드를 암호화**한다.
+
+| 방어선 | 효과 |
 |---|---|
-| 마스킹(§6)으로 **시크릿**은 제거된다 | 마스킹은 자격증명만 지운다 — **본문 자체의 민감성**은 그대로 |
-| NAS는 Tailscale 사설망 안, CouchDB 인바운드 미개방 | NAS 물리 접근·디스크 탈취·백업 매체 유출 시 평문 노출 |
-| 계정 분리(§12-3)로 최소 권한 | 관리자 계정 침해 시 전량 열람 |
+| 마스킹(§6)으로 **시크릿** 제거 | 자격증명·토큰·IP 제거 |
+| **필드 단위 암호화 (D29)** | **본문 자체의 민감성** 방어 — NAS 물리 접근·디스크 탈취·백업 매체 유출에도 본문 불가독 |
+| 계정 분리(§12-3)로 최소 권한 | DB 접근 범위 한정 |
 
-**P1은 평문으로 진행한다** (P0/P1 착수를 막지 않는다). 다만 **`career`/`personal` 세션을 처음 저장하기 전에** 아래 중 하나를 결정한다:
-- (a) 민감 세션은 본문을 **필드 단위 암호화**해 저장 (허브가 키 보유, 검색 불가 감수)
-- (b) 민감 세션은 애초에 이 시스템에 넣지 않는다 (프로젝트 민감도로 차단 — D22의 자연스러운 확장)
-- (c) 현행 유지 (Tailscale + 백업 매체 암호화로 충분하다고 판단)
+**구현 요점:**
+- 암호화 알고리즘: **`cryptography.fernet` (AES-128-CBC + HMAC-SHA256)** 사용.
+- 허브가 암호화 키 보유 (`.env`의 `HK_ENCRYPTION_KEY`). **분실 시 본문 복구 불가** — 키는 §12-4 백업 대상과 별도로 보관한다
+- 암호화 대상: **`title`**, `sections`, `decision`/`decisions`, `know_carryover` — 사람이 쓴 텍스트 전부 (v1.7에서 `title` 포함 확정)
+- 비암호화 대상: `thread`, `status`, `project_id`, `sensitivity`, `created`, `updated`, `tool`, `device`, `ts`, `ord`, `events`, `tags` 등 **메타데이터** (인덱싱·필터링 필요)
+- **저장 표현:** 본문 필드를 하나로 묶어 JSON 직렬화 후 문서당 `enc` 블록 하나로 저장한다. 필드마다 따로 암호화하지 않는다 (§2-2)
 
-> 이 항목은 **D29**로 기획서 §11-2에 등재했다.
+```jsonc
+"enc": { "v": 1, "alg": "fernet", "data": "gAAAAAB..." }   // 복호화하면 {title, sections} 등 원래 필드
+```
+
+- 렌더러(§8-1)가 복호화 후 볼트에 평문 마크다운 출력 → Obsidian 열람 영향 없음
+- **검색 불가 감수**: 암호화된 본문은 CouchDB 뷰로 전문 검색 불가. `hk search`는 허브가 뷰를 복호화해 메모리에서 매칭한다 (§3-9)
+- **thread ID에는 slug가 평문으로 남는다** — 파일명·문서 ID가 ASCII여야 하므로(R7) 구조상 불가피하다. 그래서 slug는 "주제를 알아볼 수 있는 최소한"이며, 민감한 표현을 넣지 않는다 (D30)
+- 기각: (b) 민감 세션 배제 — 사용자가 전 세션 암호화 선택, (c) 현행 평문 유지
+
+> 이 항목은 **D29**로 기획서 §11-1에 확정 등재되었다 (v3.3, `title` 포함은 v3.4).
 
 ### 0-3-1. 🔒 플레이스홀더 규약 (2026-08-11 신설)
 
-이 저장소의 문서·스크립트에는 **기기 고유값을 직접 쓰지 않는다.** 아래 형식으로만 표기하고, 실제 값은 각 기기의 `.env`(또는 셸 환경변수)에만 존재한다.
+이 저장소의 문서·스크립트에는 **기기 고유값을 직접 쓰지 않는다.** 아래 형식으로만 표기하고, 실제 값은 각 기기의 **전역 설정 파일(`~/.hyeseongkit/config.env`)** 또는 셸 환경변수에만 존재한다. (CLI 실행 시 `python-dotenv`로 파일에서 자동 로드하여 매번 환경변수를 설정하는 번거로움 방지)
 
 | 플레이스홀더 | 의미 | 실제 값의 위치 |
 |---|---|---|
@@ -98,11 +113,42 @@ HTTP API · MCP 도구 · CouchDB 스키마 · 인증 흐름 · 마스킹 규칙
 |---|---|---|
 | 허브 | **Python 3.11+ / FastAPI / uvicorn 워커 1** | 기존 `fastapi_wiki_server.py`와 동일 스택. 제약 L1 |
 | CouchDB 클라이언트 | **httpx (async)** — CouchDB HTTP API 직접 호출 | 라이브러리 의존 최소화. 제약 L1 (async) |
-| MCP 서버 | 공식 `mcp` Python SDK, **Streamable HTTP** (`/mcp`) | 원격 기기에서 브리지 없이 접속 |
+| MCP 서버 | 공식 `mcp` Python SDK **2.x** (`mcp>=2,<3`), **Streamable HTTP** (`/mcp`) | 원격 기기에서 브리지 없이 접속. **2.0에서 `FastMCP` → `mcp.server.MCPServer`로 개편**되었으므로 1.x 예제를 그대로 쓰면 `ModuleNotFoundError`가 난다 (v1.7 실측) |
+| 암호화 | `cryptography` (Fernet) — 허브 전용 의존성 | D29. CLI는 키를 모르므로 `[hub]` extra에만 둔다 (D18과 같은 취지) |
 | CLI | 표준 `argparse` + httpx. pipx 배포 (D7) | 의존성 최소 |
 | 브리지 | `vrtmrz/livesync-bridge` (Deno, Docker) | 기획서 §4-4 |
 
 ⚠️ Windows 공통 규칙 (기획서 R15): 모든 파일 I/O에 `encoding="utf-8"` 명시, CLI 진입점에서 `PYTHONUTF8=1` 가정 불가 → `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` 수행. 한국어 본문은 CLI 인자가 아니라 **stdin/파일/MCP 필드**로 받는다.
+
+### 0-5. v1.7 스펙 델타 (초기 구현에서 확정·수정된 것)
+
+v1.6 기준으로 무엇이 달라졌는지의 대조표다. **상세는 각 반영 위치를 본다** — 이 표는 추적용이며 사양의 원본이 아니다.
+20건 중 **4·5·6·17·18·20번은 구현·배포 준비 중 발견한 결함**이고(17·18은 배포를, 20은 CI를 막았을 것이다), 나머지는 사용자 결정 반영이거나 스펙 공백 보완이다.
+
+| # | 델타 | 반영 위치 | 근거 |
+|---|---|---|---|
+| 1 | push 요청에 **`slug`(선택)** — 작업 주제의 짧은 영문 요약. 새 스레드 ID의 접미사가 된다 | §3-3 | 사용자 결정 2026-08-12 (**D30**). 한글 title은 ASCII 변환에서 전부 소실돼 무의미한 랜덤 hex가 되던 문제도 함께 해소 |
+| 2 | 신규 스레드 ID 충돌 시 **409 `THREAD_EXISTS`** 신설 | §3-3 | 같은 날 같은 slug를 `-2`로 회피하면 의미 없는 스레드가 조용히 늘어난다 → 이어갈지·주제를 구체화할지 클라이언트가 결정 |
+| 3 | D29 암호화 대상에 **`title` 포함**, 저장 표현은 문서당 **`enc` 블록** | §0-2-2, §2-2, §2-3 | 사용자 결정 2026-08-12 — "모든 세션 본문 암호화"의 취지 |
+| 4 | evt 문서에 **`ord`**(epoch ns) — fold 정렬 보조 키 | §2-2, §2-4 | **구현 결함 수정.** `ts`가 초 단위라 같은 초의 push·close가 `_id` 알파벳순(close<push)으로 뒤집혔다 (`/hk:close` 경로에서 재현) |
+| 5 | 쓰기(push/decide/checkpoint/close) 직후 **허브가 뷰를 즉시 fold**. `_changes` 렌더러는 마크다운 출력만 담당 | §3-3, §8-1 | **구현 결함 수정.** push 직후 resume이 뷰 부재로 404. D14 카운트도 디바운스(2초)에 종속돼 있었다 |
+| 6 | 마스킹 규칙을 **`re.ASCII`로 컴파일** | §6-2 | **구현 결함 수정.** 유니코드 `\w`에서는 한글이 word 문자라 `100.64.0.1에`처럼 한글이 붙으면 `\b`가 성립하지 않아 MK11이 통과했다 |
+| 7 | §6-5 벡터 표기 정정 — `OPENAI_API_KEY=sk-…`는 MK08이 아니라 **MK05** 적중 | §6-5 | 구현 중 발견. `_`가 `\b` 경계를 막아 MK08은 매치되지 않는다. 값이 제거된다는 결과는 동일 |
+| 8 | `GET /v1/projects` — 인자 없으면 **전체 목록**, `name=`으로도 검색 | §3-10 | `hk link`의 목록 표시와 `hk init` 오분기 방지 가드(§7)에 필요한데 조회 수단이 없었다 |
+| 9 | push·decide 요청에 **`mask_report`(선택)** | §3-3, §3-4 | §2-2가 저장을 요구하는 필드인데 클라이언트→허브 전달 경로가 없었다 |
+| 10 | `hk init --force-new` | §10-1 | 오분기 방지 가드(§7)를 의도적으로 넘기는 수단 |
+| 11 | `--hook` 모드는 **오프라인 큐 flush를 생략** | §11-3 | §11-3("모든 명령 시작 시 flush")와 §9-2(훅 타임아웃 3초)의 충돌 해소. 훅은 자기 요청만 큐에 넣고 끝낸다 |
+| 12 | MCP SDK **2.x** (`mcp.server.MCPServer`). 허브 `/mcp`는 stateless, DNS rebinding 보호 비활성 | §0-4, §4 | `mcp` 2.0에서 `FastMCP`가 `MCPServer`로 개편. 사설망 + Bearer 인증이 방어선이고 Host 헤더는 기기마다 다르다 |
+| 13 | 허브 HTTP MCP 도구도 **치환 마스킹 수행** | §4, §6-1 | 원격 MCP 클라이언트는 CLI/브리지를 거치지 않아 ①번 방어선이 없다 |
+| 14 | `~/.hyeseongkit/config.toml`·`config.env` 전문 | §11-1 | 파일 이름만 언급되고 형식이 없었다 |
+| 15 | `HK_DEVICE_ID`·`HK_TOOL` 키 | §12-2 | 요청의 `device` 필드를 채울 클라이언트 설정 키가 목록에 없었다 |
+| 16 | 저장 인터페이스에 `thread_exists`·`refresh_view` | §2-7 | 델타 2·5의 구현에 필요 |
+| 17 | **DB·인덱스는 관리자가 선행 생성**, 허브는 존재 확인만. 권한 부족 시 조치 방법을 담은 메시지와 함께 기동 중단 | §2-1, §12-3 | **배포를 막을 결함.** v1.6은 "허브 최초 기동 시 `PUT /{db}`"라고 적었지만, F4로 분리한 `hk_hub`는 서버 관리자가 아니라 **DB를 만들 수 없고** Mango 인덱스(설계 문서)도 DB 관리자 권한이 필요하다 |
+| 18 | **허브↔CouchDB 전용 사용자 정의 네트워크** 신설 + `deploy.sh`의 idempotent 재연결(자가 복구). `HK_COUCHDB_CONTAINER` 키 추가 | §1-1, §14-4 | **배포를 막을 결함.** CouchDB가 기본 `bridge`에만 있어 **컨테이너 이름이 해석되지 않았다**(기본 브리지에는 내장 DNS가 없다). U1의 1차 해소가 부정확했다 |
+| 19 | **`docker.sock` 위협 모델과 완화 계층** 명문화 (L-1~L-5), 기각 대안(socket-proxy 등) 기록, `JENKINS_BIND` 신설, T17 추가 | §14-4-2 | 사용자 지시 2026-08-12: *"docker.sock 보안 문제를 막거나 회피할 방법을 찾아 정리"* |
+| 20 | **push 전 검사 `scripts/preflight.sh` + `.gitleaks.toml`** 신설, T13을 그 실행으로 재정의 | §14-2, §13 | 사용자 지시 2026-08-12: *"항상 푸시 전에는 … 검사하고 진행하도록 기록"*. 마스킹 테스트 벡터가 gitleaks에 걸려 **CI가 실패했을 것**이라 예외 설정이 함께 필요했다 |
+
+> **P4로 이연:** livesync-bridge 관련 산출물(`bridge/`, compose 서비스, CI 빌드 스텝)은 **작성하지 않고 주석 자리 표시만 둔다** — `config.json` 실제 필드명이 미실측(U2)이고 S2 검증 전에는 가동할 수 없어, 지금 만들면 검증 불가 상태의 이미지를 계속 빌드하게 된다 (사용자 결정 2026-08-12). 사양 자체(§8-3)는 그대로 유효하다.
 
 ---
 
@@ -127,21 +173,43 @@ NAS (Synology DS220+, 24/7)
 | 항목 | 값 |
 |---|---|
 | 허브 포트 | **9100** (기존 점유: Bifrost 8080, ChromaDB 8000, 툴서버 9000). *(추후 반영 — C5, 2026-08-11 사용자 결정: LAN 접근자가 없어 당장은 두되, 추후 Synology 방화벽으로 :9100을 Tailscale 인터페이스에 한정)* |
-| 허브 → CouchDB | **Docker 컨테이너 주소** (`HK_COUCHDB_URL`, 예: `http://<couchdb-컨테이너명>:5984`) — 기존 운용 방식 확인됨 (2026-08-11). 허브 컨테이너를 CouchDB와 같은 Docker 네트워크에 연결한다 (§12-1). **Tailscale 밖으로 CouchDB를 노출하지 않는다** |
+| 허브 → CouchDB | **Docker 컨테이너 주소** (`HK_COUCHDB_URL`, 예: `http://<couchdb-컨테이너명>:5984`). 허브와 CouchDB를 **같은 사용자 정의 네트워크**에 연결한다 (§1-1). **Tailscale 밖으로 CouchDB를 노출하지 않는다** |
 | 클라이언트 → 허브 | Tailscale 주소 (`HK_HUB_URL`) + Bearer 토큰 |
 | 시간 | 저장은 전부 **UTC ISO-8601**(`2026-08-11T02:31:00Z`), 렌더 시에만 KST 표기 |
+
+### 1-1. 허브 ↔ CouchDB 네트워크 (v1.7 — 전제 정정)
+
+> ⚠️ **v1.6까지의 "기존 운용 방식 확인됨"은 부정확했다** (U1을 성급히 해소로 표시). 2026-08-12 실측 결과 CouchDB 컨테이너는 **도커 기본 `bridge` 네트워크에만** 연결되어 있었다. **기본 브리지에는 내장 DNS가 없어 컨테이너 이름이 해석되지 않는다** — 이름으로 부르는 기능은 사용자 정의 네트워크에만 있다. 그대로 배포했다면 허브가 CouchDB를 영영 찾지 못했을 것이다.
+
+**확정 (2026-08-12 사용자 결정):** 전용 사용자 정의 네트워크를 만들고 **CouchDB를 거기에 추가로 연결**한다. 기존 `bridge` 연결과 공개 포트 5984는 그대로 두므로 **Obsidian LiveSync 클라이언트는 영향받지 않고, CouchDB 재시작도 필요 없다.**
+
+```
+docker network create <HK_DOCKER_NET>
+docker network connect <HK_DOCKER_NET> <HK_COUCHDB_CONTAINER>   # 라이브 작업, 재시작 없음
+```
+
+- 공식 `couchdb` 이미지는 `0.0.0.0:5984`에 바인드하므로 **CouchDB 설정 변경이 없다** — 새 인터페이스로 오는 연결을 그대로 받는다
+- 허브 compose는 이 네트워크를 `external: true`로 참조한다 → **`docker compose down`이 네트워크를 지우지 않으므로** hyeseongkit을 철거해도 CouchDB의 연결은 남는다 (§12-1)
+- 네트워크 생성 후 서브넷이 LAN·Tailscale 대역과 겹치지 않는지 확인한다: `docker network inspect <HK_DOCKER_NET> --format '{{json .IPAM.Config}}'`
+
+**약점과 자가 복구:** CouchDB 컨테이너를 **재생성**하면(이미지 업그레이드 등) 이 연결이 풀린다. 재시작(`docker restart`)으로는 풀리지 않는다. `deploy.sh`가 배포할 때마다 `docker network connect`를 idempotent하게 다시 실행해 스스로 복구한다 — CouchDB가 `docker run`으로 생성되어(2026-08-12 확인) compose 정의에 네트워크를 심을 수 없기 때문이다.
+
+**기각한 대안 — 호스트 게이트웨이 경유** (`extra_hosts: host.docker.internal:host-gateway` + `http://host.docker.internal:5984`): CouchDB를 전혀 건드리지 않는 장점이 있으나, **허브가 "5984를 호스트에 계속 공개해 둔다"는 결정에 결합된다.** 기획서는 CouchDB를 사설망 안으로 더 잠그는 방향(C5)을 열어 두고 있는데, 이 방식을 쓰면 그 선택이 곧 허브 장애가 된다. **미래의 보안 강화를 지금 인질로 잡지 않기 위해** 채택하지 않았다. 컨테이너 IP 직접 지정은 재시작 시 IP가 바뀌므로 검토 대상이 아니다.
 
 ---
 
 ## 2. CouchDB 스키마
 
-### 2-1. DB 생성 (허브 최초 기동 시 idempotent 수행)
+### 2-1. DB·인덱스 준비 (허브 최초 기동 시 idempotent 확인)
 
 ```
-PUT /hyeseongkit_sessions
-PUT /hyeseongkit_auth
-PUT /hyeseongkit_vault        ← 생성만. 문서는 브리지가 관리
+HEAD /hyeseongkit_sessions    ← 있으면 통과, 없으면 PUT 시도
+HEAD /hyeseongkit_auth
+HEAD /hyeseongkit_vault       ← 존재 확인만. 문서는 브리지가 관리 (P4)
+POST /{db}/_index  ×4         ← §2-5
 ```
+
+> ⚠️ **권한 (v1.7 실측 반영):** `HK_COUCHDB_USER`는 서버 관리자가 아니라 `hk_hub`이므로(F4 계정 분리) **DB를 생성할 수 없고**, Mango 인덱스(설계 문서)도 DB 관리자 권한이 있어야 만들 수 있다. 따라서 **3개 DB 생성과 `_security` 설정은 배포 절차에서 관리자가 선행**하고(§12-3), 허브는 존재를 확인만 한다. 권한이 없으면 허브는 *무엇을 해야 하는지 적힌 메시지와 함께* 기동을 멈춘다 — 조용히 반쪽 상태로 뜨지 않게.
 
 ### 2-2. `hyeseongkit_sessions` — 이벤트 문서 (불변, D5)
 
@@ -157,35 +225,41 @@ PUT /hyeseongkit_vault        ← 생성만. 문서는 브리지가 관리
   "thread": "T-20260810-session-persistence",
   "project_id": "p-3f9c2a1b7d40",
   "ts": "2026-08-11T02:31:00Z",
+  "ord": 1786501860123456789,      // (v1.7) 허브가 append 시 찍는 epoch ns. fold 정렬 보조 키
   "tool": "claude-code",           // claude-code|claude-desktop|claude-web|codex|antigravity|openwebui|manual
   "model": "claude-fable-5",       // 모르면 null
   "device": "desktop",             // 토큰의 device_id와 일치해야 함 (§5-4)
   "sensitivity": "tech",           // public|tech|career|personal
   "masked": true,
   "mask_report": ["MK08"],         // 적중한 규칙 id 목록 (값은 절대 저장 금지)
-  // ── type별 페이로드 ──
-  "title": "hyeseongkit 세션 영속화 — 설계",       // push만
-  "sections": {                                     // push만. 각 값은 마크다운 문자열
-    "context": "...", "done": "...", "todo": "...",
-    "know": "...", "questions": "..."
-  },
-  "decision": {                                     // decide만
-    "text": "결정 원문", "rationale": "근거", "rejected": "기각안", "date": "2026-08-11"
-  },
-  "checkpoint": {                                   // checkpoint만 (훅이 생성, §9-2)
+  "reopen": true,                  // push만·선택. close된 스레드를 재개한 push (§3-3)
+  "checkpoint": {                  // checkpoint만 (훅이 생성, §9-2). 메타데이터라 평문
     "reason": "precompact",        // precompact | session-end | manual
     "git": { "branch": "...", "head": "...", "dirty": 3 },
     "transcript_path": "~/.claude/projects/<project-slug>/<session>.jsonl"  // 경로만. 내용 수집 금지
   },
-  "outcome": "done"                                 // close만: done | dropped
+  "outcome": "done",               // close만: done | dropped
+  // ── 본문은 전부 enc 안에 있다 (D29) ──
+  "enc": { "v": 1, "alg": "fernet", "data": "gAAAAAB..." }
 }
 ```
+
+**`enc`가 감싸는 평문 구조 (type별)**
+
+| type | `enc` 복호화 결과 |
+|---|---|
+| `push` | `{ "title": "hyeseongkit 세션 영속화 — 설계", "sections": { "context": "...", "done": "...", "todo": "...", "know": "...", "questions": "..." } }` — 각 값은 마크다운 문자열 |
+| `decide` | `{ "decision": { "text": "결정 원문", "rationale": "근거", "rejected": "기각안", "date": "2026-08-11" } }` |
+| `checkpoint` / `close` | 본문 필드가 없으므로 **`enc` 자체를 두지 않는다** |
+
+**`ord` 필드 (v1.7 신설):** `ts`는 초 단위라 같은 초에 여러 이벤트가 들어올 수 있고(`/hk:close`는 push 직후 close를 보낸다), 그때 `_id` 문자열 정렬은 알파벳순이라 `close`가 `push`보다 앞선다 — fold 결과가 뒤집힌다. 허브가 append 시 `time.time_ns()`를 찍어 `(ts, ord, _id)` 순으로 정렬한다. 구버전 문서에는 이 필드가 없으므로 **없으면 0으로 취급**한다.
 
 **금지 필드:** 절대경로 cwd(사용자명 노출), `.env` 내용, 전사 본문. `transcript_path`는 `~` 표기로 정규화해 저장.
 
 ### 2-3. `hyeseongkit_sessions` — 뷰 문서 (재생성 가능)
 
-`_id` = `view:<thread>`. 렌더러가 fold 결과를 저장(§8-1). 이벤트에서 언제든 재계산 가능하므로 스키마 변경 부담 없음.
+`_id` = `view:<thread>`. fold 결과를 저장한다. 이벤트에서 언제든 재계산 가능하므로 스키마 변경 부담 없음.
+**쓰는 주체는 둘이다** — 쓰기 API가 응답 전에 즉시(§3-3), 렌더러가 `_changes`를 받고 다시(§8-1). 둘 다 같은 fold 함수를 쓰므로 결과는 동일하고, 나중 것이 이긴다.
 
 ```jsonc
 {
@@ -193,29 +267,38 @@ PUT /hyeseongkit_vault        ← 생성만. 문서는 브리지가 관리
   "kind": "view",
   "thread": "T-20260810-session-persistence",
   "project_id": "p-3f9c2a1b7d40",
-  "title": "hyeseongkit 세션 영속화 — 설계",
   "status": "active",              // active | done | dropped
-  "sensitivity": "tech",
+  "sensitivity": "tech",           // 이벤트들의 최대값 (D22 fail-safe)
   "created": "2026-08-10T12:00:00Z",
   "updated": "2026-08-11T02:31:00Z",
   "last_tool": "claude-code",
   "last_device": "desktop",
   "events": 7,
+  "tags": [],
+  // ── 본문은 enc 안에 (D29) ──
+  "enc": { "v": 1, "alg": "fernet", "data": "gAAAAAB..." }
+}
+```
+
+`enc` 복호화 결과:
+
+```jsonc
+{
+  "title": "hyeseongkit 세션 영속화 — 설계",
   "sections": { "context": "...", "done": "...", "todo": "...", "know": "...", "questions": "..." },
   "know_carryover": [ "이전 push에서 자동 보존된 know 라인", "..." ],
-  "decisions": [ { "text": "...", "rationale": "...", "rejected": "...", "date": "...", "tool": "..." } ],
-  "tags": []
+  "decisions": [ { "text": "...", "rationale": "...", "rejected": "...", "date": "...", "tool": "..." } ]
 }
 ```
 
 ### 2-4. fold 규칙 (이벤트 → 뷰)
 
-이벤트를 `ts` 오름차순으로 적용:
+이벤트를 **`(ts, ord, _id)` 오름차순**으로 적용 (v1.7 — `ord` 신설 이유는 §2-2):
 
 | 이벤트 | 뷰 반영 |
 |---|---|
-| `push` | `sections` 교체 + **know 이월 보존(아래)**, `title` 갱신, `updated`/`last_tool`/`last_device` 갱신 |
-| `decide` | `decisions[]`에 **append** (절대 수정·삭제 없음 — N1) |
+| `push` | `sections` 교체 + **know 이월 보존(아래)**, `title` 갱신, `updated`/`last_tool`/`last_device` 갱신, `status` = `active`(재개 포함), `sensitivity`는 **높은 쪽으로만** 갱신 (D22 fail-safe — 한 번 올라간 민감도는 내려가지 않는다) |
+| `decide` | `decisions[]`에 **append** (절대 수정·삭제 없음 — N1). `last_tool`/`last_device`는 건드리지 않는다 — 그 스레드를 "작업한" 툴은 push의 것 |
 | `checkpoint` | `updated` 갱신만. sections 불변 |
 | `close` | `status` = outcome |
 
@@ -266,12 +349,16 @@ view.know_carryover  = 이월                          # 자동 보존 블록
 
 ```python
 class SessionStore(Protocol):          # 구현체는 EventStore 하나만 (D5: document 모드 미구현)
-    async def append(self, evt: Event) -> str            # 반환: _id
-    async def load_events(self, thread: str) -> list[Event]
+    async def append(self, evt: Event) -> str            # 반환: _id. 본문 필드를 enc로 봉인
+    async def load_events(self, thread: str) -> list[Event]      # 복호화 + (ts, ord, _id) 정렬
+    async def thread_exists(self, thread: str) -> bool           # (v1.7) 신규 스레드 ID 충돌 검사 §3-3
     async def get_view(self, thread: str) -> View | None
     async def put_view(self, view: View) -> None
     async def find_views(self, project_id: str | None, status: str | None, limit: int) -> list[View]
+    async def refresh_view(self, thread: str) -> View | None     # (v1.7) load_events → fold → put_view
 ```
+
+암·복호화는 **저장 계층 안에서만** 일어난다. 상위(서비스·렌더러·API)는 평문 dict만 다루므로, D29를 끄거나 알고리즘을 바꿔도 이 계층 밖은 손대지 않는다.
 
 ---
 
@@ -316,13 +403,20 @@ class SessionStore(Protocol):          # 구현체는 EventStore 하나만 (D5: 
   "thread": "T-20260810-session-persistence",   // null이면 새 스레드 생성
   "project_id": "p-3f9c2a1b7d40",
   "title": "hyeseongkit 세션 영속화 — 설계",
+  "slug": "session-persistence",                // (v1.7·선택) 작업 주제의 짧은 영문 요약. 새 스레드 ID에만 쓰인다
   "sections": { "context": "...", "done": "...", "todo": "...", "know": "...", "questions": "..." },
   "sensitivity": "tech",
-  "tool": "claude-code", "model": "claude-fable-5", "device": "desktop"
+  "tool": "claude-code", "model": "claude-fable-5", "device": "desktop",
+  "reopen": false,                              // 선택. close된 스레드 재개 시에만 true
+  "mask_report": ["MK08"]                       // (v1.7·선택) 클라이언트 마스킹이 적중시킨 규칙 id. 값은 절대 넣지 않는다
 }
 ```
 
-처리 순서(서버): ① 토큰 검증 → ② `device` 필드 = 토큰 device 확인 → ③ **서버측 마스킹 재검사**(§6-4) → ④ 스키마 검증(`title` 필수, `sections.todo`·`sections.know` 필수 — L0 보호) → ⑤ 새 스레드면 D14 검사 → ⑥ evt 문서 append → ⑦ **201 응답**(렌더는 `_changes` 구독으로 비동기 진행 — 응답을 기다리지 않는다)
+**알 수 없는 필드는 거부한다** (400 `SCHEMA_INVALID`) — 오탈자가 조용히 무시되면 그 데이터는 영영 저장되지 않는다.
+
+처리 순서(서버): ① 토큰 검증 → ② `device` 필드 = 토큰 device 확인 → ③ **서버측 마스킹 재검사**(§6-4) → ④ 스키마 검증(`title` 필수, `sections.todo`·`sections.know` 필수 — L0 보호) → ⑤ 새 스레드면 ID 충돌 검사 후 D14 검사 → ⑥ evt 문서 append → ⑦ **뷰 즉시 fold**(§2-3) → ⑧ **201 응답**
+
+> **⑦의 근거 (v1.7 정정):** v1.6은 "렌더는 `_changes` 구독으로 비동기"라고만 적었는데, 그러면 뷰도 디바운스(2초) 뒤에야 생겨 **push 직후의 `resume`이 404**가 나고 D14 카운트도 뒤늦게 반영된다. 뷰는 응답 전에 만들고, **비동기로 남는 것은 마크다운 렌더(§8-1)뿐**이다. 뷰 갱신에 실패해도 이벤트(SSOT)는 이미 저장됐으므로 응답은 201이고, 렌더러가 곧 재계산한다.
 
 응답 `201`:
 
@@ -332,23 +426,48 @@ class SessionStore(Protocol):          # 구현체는 EventStore 하나만 (D5: 
 
 | 상태 | 코드 | 조건 |
 |---|---|---|
-| 400 | `SCHEMA_INVALID` | 필수 필드 누락, sections 키 오탈자 |
+| 400 | `SCHEMA_INVALID` | 필수 필드 누락, sections 키 오탈자, 알 수 없는 필드 |
+| 400 | `DEVICE_MISMATCH` | 바디의 `device`가 토큰의 `device_id`와 다름 (§5-4) |
+| 404 | `THREAD_NOT_FOUND` | 지정한 `thread`에 이벤트가 하나도 없음 |
 | 409 | `THREAD_LIMIT` | 새 스레드인데 해당 프로젝트 active ≥ 3 (D14). `detail.active_threads`에 목록 |
-| 409 | `THREAD_CLOSED` | close된 스레드에 push (재개는 `reopen:true` 필드로 명시) |
+| 409 | `THREAD_CLOSED` | close된 스레드에 push (재개는 `reopen:true` 필드로 명시). `detail`에 현재 status |
+| 409 | **`THREAD_EXISTS`** | **(v1.7)** 생성하려는 새 스레드 ID가 이미 있음 (아래) |
 | 422 | `REDACTION_REQUIRED` | 서버측 마스킹 재검사에서 원시 시크릿 발견. `detail.rules=["MK05"]` — **값은 응답에 싣지 않는다** |
 
-새 스레드 ID 생성: `T-<YYYYMMDD(KST)>-<slug>` — slug는 title을 ASCII로 변환(비ASCII 제거, 공백→하이픈, 소문자, 최대 40자). 전부 제거되면 `t-<랜덤4hex>` 사용. (§12 R7 — 파일명 ASCII 강제)
+#### 새 스레드 ID 생성 (D30 — 2026-08-12 확정)
+
+```
+T-<YYYYMMDD(KST)>-<slug>
+slug = ascii(요청 slug)  또는  ascii(title)  또는  t-<랜덤4hex>      ← 앞의 것이 비면 다음으로
+ascii(): 비ASCII 제거 → 공백·밑줄을 하이픈으로 → 소문자 → 최대 40자   (§12 R7 — 파일명 ASCII 강제)
+```
+
+`slug` 필드를 둔 이유: **한국어 제목은 ASCII 변환에서 통째로 사라진다.** "hyeseongkit 세션 영속화"는 `hyeseongkit`만 남고, 순한글 제목이면 아무것도 남지 않아 `t-3f9c` 같은 무의미한 ID가 된다 — 목록에서 스레드를 알아볼 수 없다. 그래서 **본문을 작성하는 모델이 주제를 짧은 영문 kebab-case로 요약해 함께 보낸다**(MCP 도구 설명과 `/hk:push` 커맨드에 규약으로 명시, §4·§9-3).
+
+**충돌 처리 — `-2` 접미사를 붙이지 않는다.** 같은 날 같은 slug가 이미 있으면 409 `THREAD_EXISTS`로 거부하고 판단을 호출자에게 넘긴다:
+
+```jsonc
+{ "error": "THREAD_EXISTS", "message": "같은 날짜·주제의 스레드가 이미 있습니다",
+  "detail": { "thread": "T-20260812-session-persistence",
+              "existing_title": "...", "existing_status": "active",
+              "hint": "같은 작업이면 thread를 지정해 push, 새 작업이면 slug에 주제를 더 구체적으로 요약해 재시도" } }
+```
+
+자동으로 `-2`를 붙이면 *"어제 하던 그 작업"*과 *"제목만 같은 다른 작업"*이 구별되지 않은 채 스레드가 늘어난다. D14(활성 3개)의 예산은 작으므로, 갈라질지 이어갈지는 매번 결정되어야 한다.
+
+> ⚠️ slug는 **암호화되지 않는다** — thread ID는 문서 `_id`이자 볼트 파일명이라 평문 ASCII여야 한다(R7). 민감한 표현을 slug에 넣지 않는다 (§0-2-2).
 
 ### 3-4. `POST /v1/session/decide`
 
 ```jsonc
 // 요청
 { "thread": "T-...", "project_id": "p-...", "decision": { "text": "원문", "rationale": "근거", "rejected": "기각안" },
-  "tool": "claude-code", "device": "desktop" }
+  "tool": "claude-code", "device": "desktop", "mask_report": [] }
 // 201 응답
 { "event_id": "evt:..." }
 ```
-`decision.text` 필수, 나머지 선택. 404 `THREAD_NOT_FOUND`.
+`decision.text` 필수, 나머지 선택. 404 `THREAD_NOT_FOUND`. push와 마찬가지로 서버측 마스킹 재검사(422)와 뷰 즉시 fold를 거친다.
+`decision.date`를 생략하면 fold가 이벤트 `ts`의 KST 날짜로 채운다 (§2-4).
 
 ### 3-5. `POST /v1/session/checkpoint` / `POST /v1/session/close`
 
@@ -435,9 +554,16 @@ P1 구현: view 문서를 Mango로 프로젝트/상태 필터 → 허브 메모�
 { "project_id": "p-3f9c2a1b7d40", "canonical": "github.com/<owner>/<repo>",
   "name": "<repo>", "sensitivity": "tech" }
 ```
-프로젝트 문서는 `hyeseongkit_sessions`에 `_id=proj:<project_id>`, `kind:"proj"`, 필드 `canonical`·`aliases[]`(개명 이력, C1)·`name`·`sensitivity`로 저장.
-`GET /v1/projects/{project_id}` — 200에 위 문서 반환, 404 `PROJECT_NOT_FOUND`.
-`GET /v1/projects?canonical=<url-encoded>` — canonical **또는 aliases** 일치 검색 (`hk init` 3단계 전용). `project.toml`은 커밋되지 않으므로(D20) 이 문서가 프로젝트 공유 설정의 기준값이다.
+프로젝트 문서는 `hyeseongkit_sessions`에 `_id=proj:<project_id>`, `kind:"proj"`, 필드 `canonical`·`aliases[]`(개명 이력, C1)·`name`·`sensitivity`로 저장. **프로젝트 문서는 암호화하지 않는다** — 식별자·설정이지 세션 본문이 아니다.
+
+| 요청 | 응답 |
+|---|---|
+| `GET /v1/projects/{project_id}` | 200에 문서, 404 `PROJECT_NOT_FOUND` |
+| `GET /v1/projects?canonical=<url-encoded>` | canonical **또는 aliases** 일치 (`hk init` 3단계, C1) |
+| `GET /v1/projects?name=<이름>` | **(v1.7)** 저장소 이름 일치 — `hk init`의 오분기 방지 가드(§7) |
+| `GET /v1/projects` | **(v1.7)** 전체 목록(name 오름차순) — `hk link`의 선택 목록 |
+
+세 형태 모두 `{ "projects": [ ... ] }`로 감싸 반환한다. `project.toml`은 커밋되지 않으므로(D20) 이 문서가 프로젝트 공유 설정의 기준값이다.
 
 ---
 
@@ -448,7 +574,7 @@ P1 구현: view 문서를 Mango로 프로젝트/상태 필터 → 허브 메모�
 
 | 도구 | 입력 스키마 (required *) | 반환 |
 |---|---|---|
-| `hk_push` | `title*`, `sections*{context,done,todo*,know*,questions}`, `thread`, `sensitivity` | `{thread, event_id}` |
+| `hk_push` | `title*`, `sections*{context,done,todo*,know*,questions}`, `thread`, `sensitivity`, **`slug`**(v1.7) | `{thread, event_id}` |
 | `hk_resume` | `thread` 또는 `last:true`, `budget`(기본 2000), `format`(기본 packet), `events`(기본 0 — L2 원문) | packet 텍스트 |
 | `hk_status` | (없음) | 스레드 목록 텍스트 |
 | `hk_decide` | `decision_text*`, `rationale`, `rejected`, `thread` | `{event_id}` |
@@ -457,9 +583,15 @@ P1 구현: view 문서를 Mango로 프로젝트/상태 필터 → 허브 메모�
 
 각 도구 description에 다음을 **반드시 포함**한다 (D21 — 모델이 본문을 작성하므로 규약을 도구 정의에 심는다):
 
-> `hk_push`: "sections는 대화 맥락에서 직접 작성한다. **결정·사용자 지시·오류 메시지·식별자(경로/SHA/포트/명령)·수치·할 일·미결 질문은 요약·변형 금지, 원문 그대로** 쓴다(N1~N7). todo와 know는 필수다."
+> `hk_push`: "sections는 대화 맥락에서 직접 작성한다. **결정·사용자 지시·오류 메시지·식별자(경로/SHA/포트/명령)·수치·할 일·미결 질문은 요약·변형 금지, 원문 그대로** 쓴다(N1~N7). todo와 know는 필수다. title이 한글 등 비ASCII면 slug에 작업 주제를 짧은 영문 kebab-case로 요약해 함께 제공하라 — thread ID가 된다."
 
-`project_id`·`tool`·`device`는 도구 인자가 아니라 **접속 설정에서 온다**: stdio 브리지는 `project.toml`+토큰에서, HTTP 직결은 토큰(device)+요청 헤더 `X-HK-Project`(`.mcp.json`에서 주입)에서 해석한다.
+**두 노출 경로가 같은 문자열을 쓴다** — description은 공용 모듈 한 곳에 두고 허브 MCP와 stdio 브리지가 함께 import한다. 한쪽만 고쳐져 규약이 갈라지는 것을 막는다.
+
+`project_id`·`tool`·`device`는 도구 인자가 아니라 **접속 설정에서 온다**: stdio 브리지는 `project.toml`+토큰(+`HK_TOOL`)에서, HTTP 직결은 토큰(device)+요청 헤더 `X-HK-Project`·`X-HK-Tool`에서 해석한다.
+
+**마스킹 (v1.7):** 허브 MCP 도구도 **치환 마스킹을 수행한 뒤** 코어를 호출한다. §6-1 ①(클라이언트 마스킹)은 CLI·stdio 브리지에만 있는 방어선이고, 원격 MCP 클라이언트는 그 경로를 지나지 않기 때문이다. 서버측 재검사(§6-4)만 남기면 정상 요청이 422로 거부되어 저장 자체가 실패한다.
+
+**SDK 주의 (v1.7 실측):** `mcp` 2.x는 `mcp.server.MCPServer`를 쓴다(1.x의 `mcp.server.fastmcp.FastMCP`는 없다). 허브의 Streamable HTTP 앱은 `streamable_http_app(streamable_http_path="/", stateless_http=True, …)`로 만들어 FastAPI의 `/mcp`에 마운트하고, lifespan에서 `session_manager.run()`을 함께 연다. 사설망(Tailscale) 안에서 기기마다 Host 헤더가 달라지므로 **DNS rebinding 보호는 비활성**하고, 인증은 Bearer 토큰(§5)에 맡긴다.
 
 ---
 
@@ -506,7 +638,9 @@ Bearer 추출 → sha256 → hyeseongkit_auth에서 idx-token 조회
 ## 6. 마스킹 (R1 — fail-closed)
 
 ### 6-1. 실행 지점
-① CLI/브리지: 전송·큐 적재 **전** ② 허브: 저장 전 재검사(§3-3 ⑤). 이중 검사 — 클라이언트가 우회해도 서버가 막는다.
+① CLI/브리지 **및 허브 MCP 도구**(v1.7): 전송·저장 **전** 치환 ② 허브 API: 저장 전 재검사(§3-3 ③). 이중 검사 — 클라이언트가 우회해도 서버가 막는다.
+
+> ①에 허브 MCP를 포함하는 이유는 §4 참조 — 원격 MCP 클라이언트에는 CLI 마스킹 단계가 존재하지 않는다.
 
 ### 6-2. 규칙 목록 (Python `re`, 순서대로 적용)
 
@@ -525,8 +659,10 @@ Bearer 추출 → sha256 → hyeseongkit_auth에서 idx-token 조회
 | MK11 | `\b100\.(6[4-9]\|[7-9][0-9]\|1[01][0-9]\|12[0-7])\.\d{1,3}\.\d{1,3}\b` | Tailscale CGNAT IP |
 | MK12 | `\bhk_[a-f0-9]{40}\b` | hyeseongkit 토큰 자신 |
 
-치환: 매치 전체 → `⟦REDACTED:<id>⟧`. MK08은 키 이름은 남기고 **값 부분만** 치환 (그룹 1 보존).
-프로젝트 추가 규칙: `project.toml [mask] extra_rules = ["..."]` — 코어 규칙에 **추가만** 가능, 제거 불가.
+치환: 매치 전체 → `⟦REDACTED:<id>⟧`. MK08은 키 이름과 구분자는 남기고 **값 부분만** 치환.
+프로젝트 추가 규칙: `project.toml [mask] extra_rules = ["..."]` — 코어 규칙에 **추가만** 가능, 제거 불가. 규칙 id는 `EX01`, `EX02`…로 붙는다.
+
+> ⚠️ **모든 규칙은 `re.ASCII`로 컴파일한다 (v1.7 필수).** 파이썬 정규식의 기본 유니코드 모드에서는 **한글이 `\w`에 포함**되므로, `100.64.0.1에 배포`처럼 값 뒤에 한글이 붙으면 `\b`가 성립하지 않아 **MK11이 통과해 버린다**(§6-5 벡터로 실측). 한국어 본문을 다루는 시스템에서 `\b`를 쓰는 이상 이 플래그는 선택이 아니다.
 
 ### 6-3. fail-closed 동작 (CLI)
 
@@ -543,12 +679,15 @@ Bearer 추출 → sha256 → hyeseongkit_auth에서 idx-token 조회
 
 | 입력 | 기대 |
 |---|---|
-| `OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwx` | MK08(값만 치환) — `sk-...` 잔존 없음 |
+| `OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwx` | **MK05** 적중 — `sk-...` 잔존 없음 <sub>(v1.7 정정: v1.6은 MK08로 적었으나 `OPENAI_API_KEY`는 `_` 때문에 MK08의 `\b(api[_-]?key\|…)` 경계가 성립하지 않아 매치되지 않는다. 값은 MK05가 잡으므로 **결과는 동일**)</sub> |
+| `api_key=abcdefgh1234` | MK08 적중, 키 이름 보존 → `api_key=⟦REDACTED:MK08⟧` |
 | `Authorization: Bearer eyJhbGciOi.eyJzdWIi.SflKxwRJ` | MK07 또는 MK09 적중 |
 | `http://user:pass1234@nas.local:5984` | MK10 → `⟦REDACTED:MK10⟧nas.local:5984` |
-| `100.64.0.1에 배포` (CGNAT 대역 예시) | MK11 적중 |
+| `100.64.0.1에 배포` (CGNAT 대역 예시) | MK11 적중 — **`re.ASCII` 없으면 실패한다** (§6-2 경고) |
+| `hk_<40hex>` | MK12 적중 (자기 토큰) |
 | `포트 9100, 커밋 b82f82b` | **적중 없음** (식별자 오탐 금지) |
 | `password: 로그인후변경하도록안내` | **적중 없음** (MK08 값은 라틴·기호만 — 한국어 산문 오탐 금지, C2) |
+| `extra_rules`에 `"("` (깨진 정규식) | **`RedactionError` → exit 3.** 아무것도 전송·저장되지 않음 (§6-3 fail-closed) |
 | `.env 파일의 값` (파일 미접근) | 애초에 수집 경로 없음 — CLI는 `.env`를 읽지 않는다 |
 
 ---
@@ -595,17 +734,20 @@ hk link p-3f9c2a1b   # 직접 지정
 
 ```
 CouchDB _changes (hyeseongkit_sessions, continuous, heartbeat=30s, since=저장된 seq)
-  → kind=="evt" 변경 감지 → 해당 thread 디바운스 2초
+  → _id가 "evt:"로 시작하는 변경 감지 → 해당 thread 디바운스 2초
   → 이벤트 fold(§2-4) → view:<thread> 저장
   → /vault-out/sessions/<thread>.md 원자적 쓰기 (같은 디렉터리에 .tmp 쓰고 os.replace)
   → HOME.md (active 목록 인덱스) 재생성
   → seq를 로컬 파일(/data/render.seq)에 체크포인트
 ```
 
+**뷰와의 역할 분담 (v1.7):** 뷰(`view:<thread>`)는 쓰기 API가 응답 전에 이미 만들어 둔다(§3-3 ⑦). 렌더러가 fold를 다시 하는 것은 낭비가 아니라 **복원 경로**다 — 큐 재전송·다른 기기의 쓰기·API의 뷰 갱신 실패 등 어떤 경로로 들어온 이벤트든 `_changes`는 빠짐없이 보므로, 렌더러가 항상 최종 상태를 맞춘다. **비동기로 미뤄지는 것은 마크다운 파일 출력뿐**이며, 기계 경로(`resume`/`status`)는 렌더러를 기다리지 않는다.
+
+- **안정성 및 재연결**: CouchDB 재시작이나 네트워크 단절로 스트리밍이 끊어질 경우, `lifespan` 태스크가 **지수 백오프(Exponential Backoff)** 로직을 통해 자동 재연결을 시도한다 (예: 1초부터 최대 60초 대기).
 - 폴링 금지(L3), 단일 태스크 — asyncio 이벤트 루프 안에서 실행(L1)
 - 파일명 = thread ID 그대로 (ASCII 보장 — §3-3), 한글 제목은 frontmatter `title:`에만 (R7)
 - 인코딩 UTF-8 BOM 없음, LF
-- close 후 **15일** 지난 스레드는 `sessions/archive/<YYYY>/`로 이동 (D12 확정, 일 1회 태스크)
+- close 후 **15일** 지난 스레드는 `sessions/archive/<YYYY>/`로 이동 (D12 확정, 일 1회 태스크). 아카이브된 스레드가 `reopen`으로 되살아나면 아카이브 사본을 지우고 `sessions/`에 다시 쓴다 — 같은 스레드가 두 곳에 남지 않게
 
 ### 8-2. 렌더 파일 형식
 
@@ -805,13 +947,17 @@ description: hyeseongkit 세션 종료
 ### 10-1. 동작 (기획서 §5-4)
 
 ```
-hk init [--name <slug>] [--dry-run]        # 개명 후 재연결은 hk init --rename이 아니라 hk link (§7)
+hk init [--name <slug>] [--dry-run] [--force-new]   # 개명 후 재연결은 hk init --rename이 아니라 hk link (§7)
   [1] §7 알고리즘으로 프로젝트 식별 → .hyeseongkit/project.toml
-  [2] POST /v1/projects 등록 (idempotent)
+  [2] 허브 조회 → 없으면 POST /v1/projects 등록 (idempotent)
   [3] 감지된 툴별 어댑터 파일 생성/병합 (아래)
   [4] hk doctor 자동 실행
 기본 --dry-run 아님. 단 기존 파일을 수정해야 할 때는 diff를 보여주고 진행(R10). 수정 전 원본을 .hyeseongkit/backup/<ts>/에 복사
+--force-new (v1.7): 오분기 방지 가드(§7 — 같은 name의 기존 프로젝트 발견 시 중단)를 넘기고 신규 생성.
+                    "이름만 같은 진짜 다른 프로젝트"를 위한 탈출구
 ```
+
+허브 미설정·불통이면 `hk init`은 **실패한다**(exit 2/4). 프로젝트 등록은 허브의 `proj:` 문서가 기준값이라(D20) 오프라인 큐로 미룰 수 없다 — `project_id`를 로컬에서 확정해 버리면 §7 3단계(canonical·aliases 조회)를 건너뛰어 기존 프로젝트와 갈라질 수 있다.
 
 | 감지 조건 | 생성/병합 대상 |
 |---|---|
@@ -890,8 +1036,26 @@ hk decide --file <결정문파일>   # 한국어는 CLI 인자 대신 파일/std
 
 ## 11. CLI 사양
 
-### 11-1. 설정 우선순위
-환경변수 (`HK_HUB_URL`, `HK_API_TOKEN`) → `.hyeseongkit/project.toml` (프로젝트) → `~/.hyeseongkit/config.toml` (전역: device_id, 기본 budget)
+### 11-1. 설정 우선순위와 전역 설정 파일
+
+환경변수 (`HK_HUB_URL`, `HK_API_TOKEN`, `HK_DEVICE_ID`, `HK_TOOL`, `HK_TOKEN_BUDGET`) → `.hyeseongkit/project.toml` (프로젝트) → `~/.hyeseongkit/config.toml` (전역: device_id, 기본 budget)
+
+**`~/.hyeseongkit/config.env`** — 기기 고유값 보관처 (D28·§0-3-1). CLI가 기동 시 읽어 **아직 설정되지 않은 환경변수만** 채운다(셸 환경변수가 항상 우선). 매번 `export` 하는 번거로움을 없애는 용도이며, 저장소 밖이라 커밋될 수 없다.
+
+```
+HK_HUB_URL=http://<HUB_HOST>:9100
+HK_API_TOKEN=hk_<40hex>
+HK_DEVICE_ID=desktop
+```
+
+**`~/.hyeseongkit/config.toml`** — 기기 단위 기본값 (v1.7 전문 확정):
+
+```toml
+device_id = "desktop"       # 이 기기의 device_id. 발급받은 토큰의 device와 일치해야 한다 (§5-4)
+budget = 2000               # resume 기본 토큰 예산
+```
+
+> `HK_ADMIN_TOKEN`·`HK_COUCHDB_*`·`HK_ENCRYPTION_KEY`는 **기기에 두지 않는다** — NAS의 `.env`에만 존재 (D18, D29).
 
 ### 11-2. 명령과 종료 코드
 
@@ -923,8 +1087,9 @@ hk decide --file <결정문파일>   # 한국어는 CLI 인자 대신 파일/std
 ```
 ~/.hyeseongkit/queue/<UTC-ts>-<4hex>.json     # 마스킹 완료된 요청 바디 + 대상 엔드포인트
 ```
-- 적재 조건: 연결 오류·타임아웃·5xx. **4xx는 적재하지 않는다** (재시도해도 실패)
+- 적재 조건: 연결 오류·타임아웃·5xx. **4xx는 적재하지 않는다** (재시도해도 실패 — 즉시 `queue/failed/`로)
 - 재전송: 모든 `hk` 명령 시작 시 큐를 오래된 순으로 flush (건당 타임아웃 2초, 실패 시 남겨두고 본 명령 진행)
+- **예외 (v1.7): `--hook` 모드는 flush를 건너뛴다.** 훅의 예산은 3초(§9-2)인데 flush는 큐 길이에 비례해 시간을 쓴다 — 훅이 자기 요청 하나만 큐에 넣고 즉시 끝나야 Claude Code 시작이 지연되지 않는다(R11). 쌓인 큐는 다음 대화형 `hk` 명령이 비운다
 - 3회 재전송 실패 파일은 `queue/failed/`로 이동하고 경고 출력
 - resume/status/search는 큐 대상 아님 (조회는 재시도 무의미)
 
@@ -967,16 +1132,18 @@ services:
     mem_limit: 512m
     networks: [couchdb]
 
-  livesync-bridge:
-    image: ghcr.io/${GHCR_OWNER}/hyeseongkit-bridge:${IMAGE_TAG:-latest}   # vrtmrz/livesync-bridge 핀 커밋 빌드 (§14-3)
-    container_name: hk-livesync-bridge
-    volumes:
-      - ./bridge-dat:/app/dat    # config.json (§8-3) — NAS 로컬 보관 (자격증명 포함, repo에 없음)
-      - vault-out:/vault-out
-    restart: unless-stopped
-    cpus: 0.5
-    mem_limit: 512m
-    networks: [couchdb]
+  # ── livesync-bridge — P4에서 주석 해제 (v1.7: 사용자 결정 2026-08-12로 이연) ──
+  # 해제 전 필수: S1 백업 → S2 테스트 DB 검증 (§8-5). config.json 필드명은 U2 미실측
+  # livesync-bridge:
+  #   image: ghcr.io/${GHCR_OWNER}/hyeseongkit-bridge:${IMAGE_TAG:-latest}   # vrtmrz/livesync-bridge 핀 커밋 빌드 (§14-3)
+  #   container_name: hk-livesync-bridge
+  #   volumes:
+  #     - ./bridge-dat:/app/dat    # config.json (§8-3) — NAS 로컬 보관 (자격증명 포함, repo에 없음)
+  #     - vault-out:/vault-out
+  #   restart: unless-stopped
+  #   cpus: 0.5
+  #   mem_limit: 512m
+  #   networks: [couchdb]
 
 volumes:
   vault-out:
@@ -989,14 +1156,19 @@ networks:
 ```
 CouchDB는 기존 컨테이너를 그대로 사용 — 이 compose에 포함하지 않고 **컨테이너 주소**(`HK_COUCHDB_URL=http://<COUCHDB_HOST>:5984`)로 접속한다 (2026-08-11 사용자 확인: 현재도 컨테이너 주소로 접근 중).
 
+> ⚠️ **Jenkins에서 실행할 때의 전제 (v1.7):** 이 compose를 Jenkins 컨테이너 안에서 돌리면 `docker compose`는 **호스트 데몬**에 명령을 보내므로(DooD), bind mount 경로와 compose 프로젝트 이름이 호스트 기준으로 해석된다. 그래서 Jenkins 컨테이너에는 `<DEPLOY_DIR>`를 **호스트와 동일한 경로**로 마운트한다 — 그러면 사람이 직접 실행하든 Jenkins가 실행하든 같은 볼륨·같은 컨테이너를 다룬다 (§14-4).
+
 ### 12-2. `.env.example` 추가 키 (값 입력은 사용자 — `.env` 접근 금지 규칙)
 
+> ⚠️ `.env`는 compose뿐 아니라 **`deploy.sh`가 셸로 읽는다**(`. ./.env`). 값에 공백이 있으면 반드시 따옴표로 감싼다.
+
 ```
-# ── NAS 배포 (deploy/.env — compose가 직접 참조) ──────────────
+# ── NAS 배포 (deploy/.env — compose·deploy.sh가 참조) ─────────
 GHCR_OWNER=""                  # ghcr 네임스페이스 (소문자)          → <GHCR_OWNER>
 IMAGE_TAG="latest"             # 배포 태그. 롤백 시 sha-xxxxxxx
 GHCR_TOKEN=""                  # 비공개 패키지일 때만 필요 (read:packages PAT)
-HK_DOCKER_NET=""               # 기존 CouchDB가 속한 도커 네트워크명   → <DOCKER_NET>
+HK_DOCKER_NET=""               # 허브와 CouchDB가 함께 붙는 사용자 정의 네트워크명 (§1-1) → <DOCKER_NET>
+HK_COUCHDB_CONTAINER=""        # CouchDB 컨테이너 이름 — deploy.sh의 네트워크 자가 복구용 (§1-1)
 
 # ── hyeseongkit hub (NAS 쪽 .env) ────────────────────────────
 HK_COUCHDB_URL=""              # 예: http://<COUCHDB_HOST>:5984 (컨테이너명)
@@ -1005,15 +1177,19 @@ HK_COUCHDB_PASSWORD=""
 HK_COUCHDB_DB="hyeseongkit_sessions"
 HK_VAULT_DB="hyeseongkit_vault"
 HK_ADMIN_TOKEN=""              # 기기 토큰 발급용. NAS에만 존재
+HK_ENCRYPTION_KEY=""           # SSOT 본문 암호화 키 (D29). 분실 시 본문 복구 불가
 HK_VAULT_OUT="/vault-out"
+HK_DATA_DIR="/data"            # (v1.7) _changes seq 체크포인트 위치. 기본값 그대로면 생략 가능
 
-# ── hyeseongkit client (각 기기 환경변수) ─────────────────────
+# ── hyeseongkit client (각 기기 환경변수 또는 ~/.hyeseongkit/config.env) ──
 HK_HUB_URL=""                  # 예: http://<HUB_HOST>:9100
 HK_API_TOKEN=""                # 기기 토큰 (§5-2로 발급)
+HK_DEVICE_ID=""                # (v1.7) 이 기기의 device_id. config.toml로도 지정 가능 (§11-1)
+HK_TOOL=""                     # (v1.7) 이벤트의 tool 필드 기본값. 미설정 시 manual
 HK_TOKEN_BUDGET="2000"
 
 # ── livesync-bridge (deploy/bridge-dat/config.json — .env 아님) ─
-# CouchDB 자격증명이 들어가므로 이 파일은 NAS에만 두고 저장소에 넣지 않는다 (§8-3)
+# CouchDB 자격증명이 들어가므로 이 파일은 NAS에만 두고 저장소에 넣지 않는다 (§8-3). P4에서 작성
 
 # ── P6 이후 (요약, 지금은 비워둠) ─────────────────────────────
 HK_SUMMARY_ENDPOINT=""
@@ -1021,19 +1197,60 @@ HK_SUMMARY_MODEL=""
 HK_SUMMARY_MODEL_PRIVATE=""
 ```
 
-### 12-3. 배포 순서 (P1·P4)
+`HK_ENCRYPTION_KEY` 생성 (NAS에서 1회, 값은 `.env`에만):
 
 ```
-P1: ① CPU 기준선 기록(§13) → ② CouchDB 계정 분리(F4): admin으로 `hk_hub` 계정 생성,
-      `hyeseongkit_*` 3개 DB의 `_security.members`에 등록 — **.env의 HK_COUCHDB_USER는
-      admin이 아니라 hk_hub** (admin은 발급·백업 관리에만 사용)
-    → ③ .env 작성(사용자) → ④ hub 컨테이너 기동
-    → ⑤ DB·인덱스 자동 생성 확인 → ⑥ (NAS) docker exec로 기기 토큰 발급 (desktop/macbook, §5-2)
-    → ⑦ curl로 push/resume 왕복 → ⑧ NAS 재부팅 후 자동 기동 확인
+docker run --rm python:3.11-slim sh -c "pip install -q cryptography && python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+```
+
+> 허브는 이 키가 없거나 형식이 틀리면 **기동하지 않는다** — 평문으로 흘러가는 경로를 만들지 않기 위한 fail-closed다 (D29).
+
+**Jenkins compose 전용 키** (`<JENKINS_DIR>/.env` — 허브의 `.env`와 별도 파일):
+
+```
+GHCR_OWNER=""            # ghcr 네임스페이스 (소문자)
+JENKINS_PORT=""          # 확인은 반드시 sudo netstat -tlnp (sudo 없이는 남의 소켓이 안 보인다)
+JENKINS_BIND=""          # 리슨 인터페이스 주소. Tailscale 주소 권장 — docker.sock 방어선 (§14-4-2 L-1)
+JENKINS_HOME_DIR=""      # Hyper Backup 대상에 포함할 것 (§12-4)
+DEPLOY_DIR=""            # 허브 배포 디렉터리. 호스트 경로 그대로 (§14-4-1 전제 3)
+DOCKER_GID=""            # stat -c '%g' /var/run/docker.sock 의 출력값 그대로
+```
+
+### 12-3. 배포 순서 (P1·P4)
+
+순서의 근거가 되는 제약은 두 가지다 — **CouchDB 권한은 위에서 아래로만 줄 수 있고(§2-1), CPU 기준선은 변경 전에 찍어야 의미가 있다(L7).**
+
+```
+P0: ① Jenkins 재설치 (배포 트리거 — 런북 §2~§4)
+    → ② Jenkins 안정화 후 CPU 기준선 재기록  ★ 순서 주의
+       (기존 기준선은 구 Jenkins가 돌던 상태의 값이다. 허브 추가분만 보려면
+        "Jenkins 있고 허브 없는" 상태가 비교 대상이어야 한다)
+
+P1: ③ 네트워크 준비 (§1-1) — docker network create → CouchDB를 추가 연결
+       (CouchDB 재시작 없음. 서브넷이 LAN·Tailscale과 겹치지 않는지 확인)
+    → ④ CouchDB 준비 (관리자 계정으로 — F4·§2-1)
+       a. hk_hub 계정 생성
+       b. hyeseongkit_sessions / _auth / _vault  3개 DB 생성      ← 허브는 못 만든다
+       c. 각 DB의 _security.admins 에 hk_hub 등록                 ← 인덱스 생성에 필요
+          (members가 아니라 admins. 서버 관리자와는 다른, DB 한정 권한이다)
+    → ⑤ .env 작성(사용자) — HK_ENCRYPTION_KEY 생성 포함 (§12-2)
+    → ⑥ Jenkins hk-deploy 실행 → 허브 컨테이너 기동
+    → ⑦ 인덱스 자동 생성 확인 (허브 로그) → ⑧ (NAS) docker exec로 기기 토큰 발급 (§5-2)
+    → ⑨ curl로 push/resume 왕복(T2) → ⑩ NAS 재부팅 후 자동 기동 확인(T9)
+    → ⑪ 1주 CPU 관측(L7) — ②의 기준선과 비교
+
 P4 추가(F4): LiveSync 기기용 `vault_client` 계정 생성 — `hyeseongkit_vault`(+원하면 `obsidian_vault`)만
     접근 가능. 세션 볼트 등록(§8-4)은 admin이 아니라 이 계정으로 한다
 P4: ① S1 백업 → ② S2 테스트 DB 검증 → ③ 실 DB 전환 → ④ 기기 볼트 등록(§8-4)
     → ⑤ 휴대폰에서 세션 확인 → ⑥ 1주 CPU 관측(L7)
+```
+
+`_security` 설정 예 (3개 DB 각각, 관리자 계정으로):
+
+```jsonc
+// PUT /{db}/_security
+{ "admins":  { "names": ["hk_hub"], "roles": [] },   // 설계 문서(인덱스) 생성 권한
+  "members": { "names": [], "roles": [] } }
 ```
 
 ---
@@ -1051,6 +1268,14 @@ SSOT의 유일본이 NAS CouchDB이므로 백업은 필수다. 볼트 뷰는 최
 - 1차 백업 대상 폴더에 `obsidian_vault` 데이터도 포함되므로 **S1(위키 볼트 백업)의 상시화**를 겸한다 → 설정 완료로 **S1의 CouchDB 측 전제가 이미 충족**됐다. P4 착수 시 볼트 **파일** 백업(`<VAULT_PATH>`)만 추가 확인하면 된다
 - 서버측 복제(`POST /_replicate`)로 같은 NAS 안에 사본을 두는 방식은 **디스크 장애를 못 막으므로** 1차 백업의 대체가 아니다 (보조로는 가능)
 
+**DB 밖에서 백업해야 하는 것 (v1.7)**
+
+| 대상 | 없으면 | 보관 위치 |
+|---|---|---|
+| **`HK_ENCRYPTION_KEY`** | 백업을 복원해도 **본문을 영영 못 읽는다** — 백업이 무의미해진다 (D29) | `.env`와 **별개 경로**에 사본 1부. 저장소·볼트에는 넣지 않는다 |
+| `jenkins_home` | 배포 job 정의를 잃는다 (SCM에 없다 — §14-4-1) | Hyper Backup 대상에 `<JENKINS_HOME_DIR>` 추가. 재생성은 §14-4-1 표로도 가능 |
+| `<DEPLOY_DIR>/.env` | 재배포에 필요한 값 전부 | 위와 동일. **자격증명이므로 NAS 밖으로 나갈 때는 암호화** |
+
 ---
 
 ## 13. 수용 기준 (기획서 §14에서 스펙으로 내림)
@@ -1067,9 +1292,14 @@ SSOT의 유일본이 NAS CouchDB이므로 백업은 필수다. 볼트 뷰는 최
 | T8 | 허브 중단 상태에서 push | exit 0 + 큐 적재, 허브 복구 후 다음 명령에서 자동 flush |
 | T9 | NAS 재부팅 | 전 컨테이너 자동 기동, seq 체크포인트부터 렌더 재개 |
 | T10 | `hk init` 2회 연속 실행 | 두 번째는 무변경 (idempotent), 기존 설정 파일 파괴 없음 |
-| T11 | main 머지 → CI 통과 → NAS에서 `./deploy.sh <태그>` | 컨테이너가 해당 태그로 교체되고 healthz 통과 (§14-4). **사람이 실행하기 전에는 배포되지 않음** |
-| T12 | NAS에서 `./deploy.sh <이전태그>` | 이전 버전으로 롤백 완료 (§14-6) |
-| T13 | 워크플로 파일 전문 검사 | 내부망 주소·NAS 경로·자격증명이 **한 곳도 없음** (플레이스홀더 규약 §0-3-1) |
+| T11 | main 머지 → CI 통과 → Jenkins `hk-deploy`를 `IMAGE_TAG=<태그>`로 Build Now | 컨테이너가 해당 태그로 교체되고 healthz 통과 (§14-4). **사람이 버튼을 누르기 전에는 배포되지 않음** |
+| T12 | Jenkins에서 `IMAGE_TAG=<이전태그>`로 재실행 | 이전 버전으로 롤백 완료 (§14-6) |
+| T13 | **`sh scripts/preflight.sh`** (push 전 필수) | 전 항목 통과 — 내부망 주소·NAS 경로·호스트명·자격증명이 **한 곳도 없고** lint·테스트도 통과 (§14-2, 플레이스홀더 규약 §0-3-1) |
+| **T14** | Jenkins 컨테이너에서 `docker compose ps` 실행 | 호스트의 hyeseongkit 컨테이너가 보인다 — DooD 3전제(§14-4-1) 성립 확인. **배포 시도 전에 이것부터** |
+| **T15** | 잘못된 `HK_ENCRYPTION_KEY`로 허브 기동 | **기동 실패** (평문으로 흘러가지 않는다 — D29 fail-closed) |
+| **T16** | `hk_hub` 권한 없이 허브 기동 (`_security` 미설정) | 기동 실패 + *무엇을 해야 하는지* 적힌 로그 (§2-1) |
+| **T17** | **사설망 밖(LAN)에서 Jenkins 포트 접속** | **연결 거부.** `docker.sock` 위험의 실질적 방어선이 서 있는지 확인 (§14-4-2 L-1) |
+| **T18** | CouchDB 컨테이너 재생성 → Jenkins에서 재배포 | `deploy.sh`가 네트워크를 다시 붙여 healthz 통과 (§1-1 자가 복구) |
 
 ---
 
@@ -1080,15 +1310,15 @@ SSOT의 유일본이 NAS CouchDB이므로 백업은 필수다. 볼트 뷰는 최
 | # | 항목 | 상태 |
 |---|---|---|
 | **D25** ✅ | 코드 저장소 | **확정 — 별도 저장소 `hyeseongkit`.** D15의 명명과 일치, 기존 인프라 저장소(`local-llm-setup`)과 수명주기 분리, K1 표현. 기각: 모노레포(릴리스·CI 트리거 섞임) |
-| **D26** ✅ | 배포 실행 주체 | **재확정 — (D) 러너 없음 · NAS에서 수동 pull 배포** (2026-08-11 재결정). GitHub은 **CI + 이미지 발행까지만** 하고, 배포는 NAS에서 `deploy.sh` 1회 실행. 기각: (A) 데스크톱 러너(가동률) / (B) hosted+Tailscale(GitHub에 tailnet 진입 자격 보관) / **(C) NAS self-hosted 러너 — 저장소 공개 시 러너가 노출면이 되고, `docker.sock` 신뢰가 남는다** (§14-1-1) |
-| **D27** ✅ | 배포 트리거 | **확정(D26 (D)에 맞춰 조정) — 머지 → 테스트 → 빌드·푸시 → 사용자가 NAS에서 배포 실행.** 테스트는 PR에서 선실행되고 main push에서도 재실행되며, 빌드보다 앞에 둔다(실패를 더 싸게). **배포 실행 자체가 곧 "사전 동의"** 이므로 GitHub Environment 승인 게이트는 불필요해져 제거. 기각: 완전 자동(승인 규칙 위반) / 태그 릴리스(개인 프로젝트에 과함) |
+| **D26** ✅ | 배포 실행 주체 | **재확정 — (D) 러너 없음 · NAS 내부 Jenkins 수동 트리거** (2026-08-12 갱신). GitHub은 **CI + 이미지 발행까지만** 하고, 배포는 이미 NAS에 구동 중인 Jenkins의 수동 빌드(Build Now) 버튼 클릭으로 실행. 기존 Jenkins의 오버헤드를 재사용하므로 추가 자원 부담 0. |
+| **D27** ✅ | 배포 트리거 | **확정(D26 (D)에 맞춰 조정) — 머지 → 테스트 → 빌드·푸시 → 사용자가 NAS Jenkins 수동 실행.** 배포 실행 자체가 곧 "사전 동의" 이므로 자동화된 GitHub Environment 승인 게이트는 불필요해져 제거. |
 
-**빌드는 항상 GitHub hosted 러너에서 한다. NAS는 pull + up만** — 2코어 보호(제약 L 계열). `local-llm-setup`의 기존 `pipeline.yml` 패턴(gitleaks/ruff 병렬 → 후속 job)을 재사용한다.
+**빌드는 항상 GitHub hosted 러너에서 한다. NAS는 Jenkins를 통해 pull + up만** — 2코어 보호(제약 L 계열). `local-llm-setup`의 기존 `pipeline.yml` 패턴(gitleaks/ruff 병렬 → 후속 job)을 재사용한다.
 
-> **(D) 채택의 효과 (2026-08-11 사용자 결정):**
+> **(D) 채택의 효과 (Jenkins 수동 트리거):**
 > ① **GitHub에 저장하는 시크릿 0개** — 배포 자격증명이 `.env`(NAS 로컬)에만 존재
-> ② **NAS 인바운드 개방 0, 상주 러너 0** — 저장소를 공개해도 인프라 노출면이 늘지 않는다
-> ③ 대가: 배포가 원클릭이 아니라 **NAS 접속 후 명령 1회**. D27이 어차피 수동 승인을 요구했으므로 실질 추가 부담은 "승인 버튼" → "명령 실행"의 차이뿐이다
+> ② **NAS 인바운드 개방 0, 상주 러너 0** — 저장소를 공개해도 인프라 노출면이 늘지 않음
+> ③ **SSH 접속 불필요** — Jenkins 웹 UI를 통해 클릭 한 번으로 배포 및 로그 확인 가능
 
 ### 14-1-1. D26 상세 검토 — 배포 실행 주체 3안 비교
 
@@ -1141,19 +1371,21 @@ NAS 러너 컨테이너(상주, GitHub로 outbound long-poll만) → deploy job�
 | NAS만 켜져 있으면 배포 가능 (데스크톱 무관) | ③ 러너의 GitHub long-poll 상시 연결 1개 — 부하는 무시 가능하나 "상시 연결"이 존재 (L3의 정신과는 미세한 긴장) |
 | 배포 스텝이 가장 단순 (네트워크 홉 없음, join 지연 없음) | |
 
-#### (D) 러너 없음 — NAS 수동 pull 배포 ★ **최종 채택 (2026-08-11)**
+#### (D) 러너 없음 — NAS 로컬 트리거 배포 ★ **최종 채택 (2026-08-11, 2026-08-12 Jenkins로 구체화)**
 
 ```
 GitHub: CI(테스트·스캔) → 이미지 빌드 → ghcr 푸시   [여기서 GitHub의 역할 끝]
-NAS   : (사용자) cd <DEPLOY_DIR> && ./deploy.sh      → pull + up -d + healthz
+NAS   : (사용자) Jenkins "hk-deploy" Build Now      → ./deploy.sh → pull + up -d + healthz
 ```
 
 | 장점 | 단점 |
 |---|---|
-| **GitHub 시크릿 0개 · NAS 인바운드 0 · 상주 프로세스 0** — 세 축 모두 깨끗 | ① 배포에 사람 개입 1회 (NAS 접속 후 명령). D27이 어차피 수동 승인이라 실질 차이는 작다 |
-| **저장소를 공개해도 인프라 노출면이 늘지 않는다** — 워크플로가 내부망을 전혀 모른다 | ② GitHub UI에서 배포 이력을 볼 수 없다 (배포 로그는 NAS에 남음) |
-| `docker.sock` 신뢰 문제 소멸 | ③ 배포하려면 NAS에 닿아야 한다 (Tailscale — 폰 포함 어디서든 가능) |
-| 러너 버전 관리 대상 없음 | |
+| **GitHub 시크릿 0개 · NAS 인바운드 0 · 상주 러너 0** — 세 축 모두 깨끗 | ① 배포에 사람 개입 1회 (Jenkins 버튼). D27이 어차피 수동 승인이라 실질 차이는 작다 |
+| **저장소를 공개해도 인프라 노출면이 늘지 않는다** — 워크플로가 내부망을 전혀 모른다 | ② GitHub UI에서 배포 이력을 볼 수 없다 (배포 로그는 Jenkins 빌드 이력에 남음) |
+| **GitHub → NAS 방향 연결이 없다** — (C)의 `docker.sock` 신뢰 문제는 *저장소가 워크플로를 지시*할 때 생기는데, Jenkins job 정의는 NAS 로컬에 있고 SCM에서 가져오지 않는다 (§14-4) | ③ 배포하려면 NAS에 닿아야 한다 (Tailscale — 폰 브라우저 포함 어디서든 가능) |
+| 러너 버전 관리 대상 없음 (Jenkins는 배포 전에도 이미 상주) | |
+
+**(D)를 SSH가 아니라 Jenkins로 실행하는 이유 (2026-08-12 사용자 결정):** NAS에 Jenkins가 이미 있으므로 추가 상주 프로세스가 없고, **SSH를 열지 않고도** 브라우저에서 버튼 하나로 배포·로그 확인이 된다. `deploy.sh`는 그대로이며 **트리거 수단만** 바뀐 것이다 — Jenkins가 죽어도 NAS 셸에서 같은 스크립트를 직접 실행하면 된다.
 
 #### 비교 매트릭스
 
@@ -1164,7 +1396,7 @@ NAS   : (사용자) cd <DEPLOY_DIR> && ./deploy.sh      → pull + up -d + healt
 | NAS 인바운드 개방 | SSH 상시 | SSH 상시 | 없음 | **없음** |
 | 상주 프로세스 | 데스크톱 러너 | 없음 | NAS 러너 컨테이너 | **없음** |
 | 공개 저장소 적합성 | ⚠️ 러너 노출 | ○ (시크릿 존재) | ⚠️ 러너 노출 | **✅ 적합** |
-| 배포 자동화 정도 | 승인 후 자동 | 승인 후 자동 | 승인 후 자동 | 사람이 명령 1회 |
+| 배포 자동화 정도 | 승인 후 자동 | 승인 후 자동 | 승인 후 자동 | 사람이 버튼 1회 |
 | 침해 시 최대 피해 경로 | 데스크톱 | GitHub 침해 → tailnet 진입 | 저장소 침해 → NAS Docker | **경로 없음** |
 
 #### 판단 기록
@@ -1177,17 +1409,39 @@ NAS   : (사용자) cd <DEPLOY_DIR> && ./deploy.sh      → pull + up -d + healt
 
 ```
 hyeseongkit/
-├── docs/                   # 기획서·설계서·인계 문서 + references/ (2026-08-11 인프라 저장소에서 이관)
-├── src/hyeseongkit/        # 단일 패키지 — core + skills (K3: CLI/MCP/HTTP가 같은 코어)
+├── docs/                   # 기획서·설계서·런북 + references/ (2026-08-11 인프라 저장소에서 이관)
+├── src/hyeseongkit/        # 단일 패키지 (K3: CLI/MCP/HTTP가 같은 코어)
+│   ├── core/               #   설정·전송·마스킹·프로젝트 식별·오프라인 큐 — CLI와 허브가 공유
+│   ├── hub/                #   CouchDB·암호화·fold·저장소·인증·서비스·API·렌더러·MCP
+│   ├── cli/                #   hk 서브커맨드 + stdio MCP 브리지
+│   └── templates/          #   hk setup이 설치하는 슬래시 커맨드·훅, hk init의 마커 블록 (§9-3, §10-5)
 ├── hub/Dockerfile          # 허브 이미지 (pip install .[hub])
-├── bridge/                 # livesync-bridge 핀 커밋 빌드 (Dockerfile + PINNED_COMMIT)
-├── deploy/docker-compose.yml   # §12-1의 원본. 배포 job이 NAS로 복사
+├── deploy/
+│   ├── docker-compose.yml  #   §12-1의 원본. 사용자가 NAS로 복사
+│   ├── deploy.sh           #   §14-4. Jenkins job과 사람이 같은 스크립트를 쓴다
+│   └── jenkins/            #   (v1.7) 배포 트리거용 Jenkins 자체 구성 — Dockerfile + compose
+├── bridge/                 # (P4에서 신설) livesync-bridge 핀 커밋 빌드
+├── scripts/preflight.sh    # (v1.7) push 전 검사 — 고유값·시크릿·lint·테스트
 ├── tests/                  # 마스킹 벡터(§6-5) 포함
+├── .gitleaks.toml          # (v1.7) CI secret-scan과 preflight가 공유. 예외는 근거 주석 필수
 ├── .pre-commit-config.yaml # 로컬 lint (C3): ruff check + ruff format — CI와 동일 규칙
-└── .github/workflows/pipeline.yml
+└── .github/workflows/
+    ├── pipeline.yml        #   CI + 허브 이미지 발행 (§14-3)
+    └── jenkins-image.yml   #   (v1.7) Jenkins 이미지 발행 — deploy/jenkins/ 변경 시·수동
 ```
 
 **lint 단일화 (C3):** 규칙은 `pyproject.toml [tool.ruff]` 한 곳에만 둔다. 로컬은 `pre-commit install` 후 커밋마다 자동 실행(또는 수동 `ruff check .`), CI의 lint job도 같은 설정을 읽는다 — 로컬과 CI 결과가 항상 일치.
+
+**push 전 검사 `scripts/preflight.sh` (v1.7 신설, 사용자 지시 2026-08-12):** CI가 잡아주기 **전에** 로컬에서 막는 계층이다. 공개 저장소이므로 시크릿·기기 고유값이 한 번 push되면 이력에서 지우기 어렵다.
+
+| 검사 | 근거 |
+|---|---|
+| Tailscale·사설 IP, NAS 실경로, 호스트명·계정명, 개발 기기 절대경로 | **자동 스캐너가 모르는 값들** — D28 플레이스홀더 규약을 기계적으로 강제 |
+| 토큰·키 패턴, `.env.example`에 채워진 값 | R1·D28 |
+| `tmp/`·`.env`·`.venv`가 커밋 대상에 섞였는지 | `.gitignore` **규칙이 있어도 이미 추적 중이면 무의미**하므로 결과를 확인한다 |
+| `ruff check` / `ruff format` / `pytest` | CI lint·test job과 같은 판정을 로컬에서 미리 |
+
+`.gitleaks.toml`은 CI의 secret-scan job과 이 스크립트가 공유한다. **마스킹 규칙(§6)을 검증하려면 진짜 형식의 합성 시크릿이 필요**하므로 `tests/test_redact.py`·`tests/test_api.py`와 §6-5 벡터 문자열만 좁게 예외 처리했다 — 그래서 **그 파일들에는 실제 자격증명을 절대 넣지 않는다**(스캐너가 봐주지 않는다).
 
 ### 14-3. `.github/workflows/pipeline.yml` 전문
 
@@ -1196,8 +1450,8 @@ name: Pipeline
 
 # CI: secret-scan / lint / test / codeql 병렬 (PR + main push) — 전부 GitHub hosted 러너
 # CD: main push → publish(이미지 빌드·ghcr 푸시)까지만.
-#     실제 배포는 NAS에서 사람이 ./deploy.sh 실행 (D26 (D) — 러너·시크릿·인바운드 0)
-# 롤백: NAS에서 ./deploy.sh <이전-태그>  (§14-6)
+#     실제 배포는 NAS Jenkins에서 사람이 Build Now (D26 (D) — 러너·시크릿·인바운드 0)
+# 롤백: Jenkins에서 IMAGE_TAG=<이전-태그>로 재실행  (§14-6)
 
 on:
   push:
@@ -1278,20 +1532,25 @@ jobs:
           IMG=ghcr.io/${{ steps.owner.outputs.lc }}/hyeseongkit-hub
           docker build -f hub/Dockerfile -t $IMG:${{ steps.meta.outputs.tag }} -t $IMG:latest .
           docker push --all-tags $IMG
-      - name: Build & push bridge (핀 커밋)
-        run: |
-          IMG=ghcr.io/${{ steps.owner.outputs.lc }}/hyeseongkit-bridge
-          docker build -f bridge/Dockerfile -t $IMG:${{ steps.meta.outputs.tag }} -t $IMG:latest bridge/
-          docker push --all-tags $IMG
+      # ── bridge 빌드 — P4에서 주석 해제 (v1.7: 사용자 결정 2026-08-12로 이연) ──
+      # - name: Build & push bridge (핀 커밋)
+      #   run: |
+      #     IMG=ghcr.io/${{ steps.owner.outputs.lc }}/hyeseongkit-bridge
+      #     docker build -f bridge/Dockerfile -t $IMG:${{ steps.meta.outputs.tag }} -t $IMG:latest bridge/
+      #     docker push --all-tags $IMG
       - name: 배포 안내
-        run: echo "이미지 발행 완료 — NAS에서 ./deploy.sh ${{ steps.meta.outputs.tag }} 실행 (D26 (D))"
+        run: echo "이미지 발행 완료 — NAS Jenkins에서 IMAGE_TAG=${{ steps.meta.outputs.tag }}로 배포 (D26 (D))"
 ```
+
+**Jenkins 이미지 워크플로 `.github/workflows/jenkins-image.yml` (v1.7):** `deploy/jenkins/**` 변경 시 + `workflow_dispatch`로만 돌며, `ghcr.io/<GHCR_OWNER>/hyeseongkit-jenkins`를 발행한다. 배포 파이프라인과 수명주기가 다르므로(거의 바뀌지 않는다) 본 파이프라인에 섞지 않는다. 빌드를 NAS에서 하지 않는 이유는 §14-1의 원칙 그대로 — **2코어를 지키기 위해 NAS는 pull과 up만 한다.**
 
 **병렬성 (C3):** CI 4개 job(secret-scan/lint/test/codeql)은 전부 병렬이다. `publish`는 [secret-scan, lint, test]만 기다린다 — CodeQL(수 분 소요)은 병렬로 돌고 결과가 Security 탭에 남으므로, **NAS에서 배포를 실행하기 전에 확인**한다. 검사를 유지하면서 발행 시간을 늘리지 않는 구성이다.
 
 **워크플로가 모르는 것:** 내부망 주소, NAS 경로, CouchDB 자격증명, 배포 대상. GitHub Actions는 이 저장소의 소스와 ghcr만 다룬다 — 저장소를 공개해도 인프라 정보가 워크플로에 없다.
 
-### 14-4. NAS 배포 스크립트 `deploy/deploy.sh` (D26 (D))
+### 14-4. NAS 배포 — `deploy/deploy.sh` + Jenkins 트리거 (D26 (D))
+
+배포의 **실체는 스크립트 하나**이고, Jenkins는 그것을 브라우저에서 누를 수 있게 하는 껍데기다. 이 분리를 지키면 Jenkins가 고장 나도 배포 능력을 잃지 않는다.
 
 ```sh
 #!/bin/sh
@@ -1328,25 +1587,103 @@ echo "healthz 실패 — 롤백 검토 (§14-6)"; exit 1
 - `.env`·`bridge-dat/config.json`은 **NAS에만 존재**하며 저장소에 넣지 않는다
 - compose가 `.env`를 자동으로 읽으므로 `--env-file` 지정이 필요 없다
 
+#### 14-4-1. Jenkins job `hk-deploy` (v1.7 — 사용자 확정 2026-08-12)
+
+| 항목 | 값 | 이유 |
+|---|---|---|
+| 유형 | Freestyle project (또는 로컬 Pipeline script) | 배포는 스텝 하나. 파이프라인 문법이 필요 없다 |
+| **SCM** | **없음 (None)** | ★ 아래 참조 |
+| 빌드 트리거 | **전부 해제** — 사람이 Build Now | D27(수동), 제약 L3(폴링 금지) |
+| 파라미터 | `IMAGE_TAG` (String, 기본 `latest`) | 롤백이 같은 job의 재실행이 된다 (§14-6) |
+| 빌드 스텝 | `cd <DEPLOY_DIR> && ./deploy.sh "$IMAGE_TAG"` | 사람이 셸에서 치는 것과 **완전히 같은 명령** |
+
+> ★ **SCM을 쓰지 않는 것이 이 구성의 핵심 안전장치다.** Jenkins는 배포를 위해 `docker.sock` 권한을 갖는다. 만약 job이 저장소에서 `Jenkinsfile`을 가져오도록 하면, **저장소에 머지된 임의의 코드가 NAS Docker 권한으로 실행**된다 — 이는 D26에서 (C) NAS self-hosted 러너를 기각한 바로 그 위험이며, 공개 저장소에서는 더 크다. job 정의를 NAS 로컬에만 두면 저장소는 배포 경로를 전혀 모른다.
+>
+> 대가: **job 정의가 버전 관리되지 않는다.** 그래서 `jenkins_home`이 §12-4 백업 대상에 포함되어야 하고, 위 표가 그 job의 사양 기록 역할을 한다 (표만 보고 재생성 가능해야 한다).
+
+**DooD 전제 3가지** — Jenkins 컨테이너가 호스트 Docker를 조종하므로 다음이 성립해야 한다:
+
+| # | 조건 | 성립하지 않으면 |
+|---|---|---|
+| 1 | `/var/run/docker.sock` 마운트 + 접근 권한(그룹) | `docker: command not found`가 아니라 **permission denied** |
+| 2 | Jenkins 이미지에 **docker CLI + compose 플러그인** 포함 | 공식 `jenkins/jenkins:lts`에는 없다 → `deploy/jenkins/Dockerfile`로 만들어 ghcr에서 pull (§14-3) |
+| 3 | `<DEPLOY_DIR>`를 **호스트와 동일한 경로로** 마운트 | compose의 bind mount(`./bridge-dat` 등)와 프로젝트 이름이 호스트 기준으로 해석되므로, 경로가 다르면 **볼륨이 갈라지거나 마운트가 실패**한다 (§12-1 경고) |
+
+### 14-4-2. `docker.sock` 노출 — 위협과 완화 (v1.7 신설, 사용자 지시 2026-08-12)
+
+> **먼저 사실부터: `docker.sock`을 마운트한 컨테이너는 사실상 호스트 root다.** 부분 권한 같은 것은 없다.
+> 그 안에서 명령을 실행할 수 있는 사람은 `docker run -v /:/host --privileged`로 호스트 파일시스템 전체를 잡을 수 있고, 다른 컨테이너의 시크릿을 읽을 수 있다. **"제한된 docker 권한"은 존재하지 않는다**는 것을 전제로 방어를 설계한다.
+
+#### 공격 경로 (누가 그 안에서 명령을 실행할 수 있는가)
+
+| # | 경로 | 이 구성에서의 상태 |
+|---|---|---|
+| A1 | **Jenkins job을 편집·생성할 수 있는 사람** | 관리자 계정 1개. 익명 접근 없음 |
+| A2 | **저장소에서 가져온 코드가 job으로 실행됨** | ✅ **차단됨** — SCM 미사용(§14-4-1). 공개 저장소에 무엇이 머지되든 Jenkins는 읽지 않는다 |
+| A3 | **Jenkins 자체 또는 플러그인의 RCE 취약점** | 플러그인 최소 설치로 면적 축소. 잔존 |
+| A4 | **관리자 계정 탈취** (약한 비밀번호·세션 탈취) | 잔존 |
+
+A2를 구조적으로 없앤 것이 이 설계의 핵심이다. 남은 A1·A3·A4는 **모두 "Jenkins에 네트워크로 닿을 수 있다"를 전제**로 한다.
+
+#### 완화 — 효과 순서대로
+
+| 층 | 조치 | 효과 |
+|---|---|---|
+| **L-1** | **Jenkins를 사설망(Tailscale) 인터페이스에만 바인드** — `JENKINS_BIND`에 Tailscale 주소 지정, 또는 Synology 방화벽으로 해당 포트를 Tailscale 인터페이스에 한정 | ★ **가장 실효적.** A1·A3·A4가 전부 "먼저 사설망에 들어와야" 성립하게 된다. LAN·공인망에서는 취약점이 있어도 닿을 수 없다 |
+| **L-2** | **신뢰 경계 유지** — SCM 미사용, 빌드 트리거 전부 해제, job은 로컬 정의만 | A2 원천 차단 (§14-4-1) |
+| **L-3** | **공격면 축소** — 설치 마법사에서 **플러그인 전부 해제**, 익명 접근 차단, 에이전트 포트(50000) 미공개, Jenkins 정기 업데이트 | A3의 확률을 낮춘다. 플러그인은 Jenkins CVE의 최대 공급원이다 |
+| **L-4** | **자격 최소화** — Jenkins에 저장하는 크리덴셜 0개. 배포에 필요한 값은 전부 NAS 로컬 `.env`에 있고 Jenkins는 스크립트만 호출한다 | Jenkins가 뚫려도 **훔칠 시크릿이 그 안에 없다** |
+| **L-5** | **잔여 위험 수용** — 위를 다 해도 "사설망에 들어온 공격자 = 호스트 root"는 남는다 | 아래 대안 경로 참조 |
+
+#### 검토했으나 채택하지 않은 것
+
+**docker-socket-proxy (`tecnativa/docker-socket-proxy` 등).** 소켓 앞에 프록시를 두고 필요한 API만 화이트리스트하는 방식이다. **이 용도에는 방어가 되지 않는다.** 배포를 하려면 `POST` + `CONTAINERS` + `NETWORKS` + `EXEC`를 열어야 하는데, 그 조합만으로 이미 탈출이 가능하다 — `/containers/create`에 `Binds: ["/:/host"]`와 `Privileged: true`를 실어 컨테이너를 만들면 그만이다. 프록시는 **읽기 전용 소비자**(컨테이너 목록만 필요한 리버스 프록시 등)에게는 유효하지만, **컨테이너를 만들 수 있는 주체에게는 심리적 안전감만 준다.** 관리 대상만 하나 늘리므로 도입하지 않는다.
+
+**rootless Docker / user namespace remap.** Synology Container Manager는 root 데몬으로 동작하며 rootless 모드를 제공하지 않는다. 해당 없음.
+
+**전용 배포 헬퍼 컨테이너** (소켓은 헬퍼만 쥐고, Jenkins는 HTTP로 "배포" 한 함수만 호출). 공격면을 "docker API 전체"에서 "인자 하나짜리 엔드포인트"로 좁히는 실질적 이득이 있으나, 유지보수 대상이 하나 늘고 K0("필요한 기능만 만든다")에 어긋난다. **L-1이 제대로 되어 있으면 얻는 이득이 작다.** 잔여 위험이 문제가 될 때 재검토한다.
+
+#### 완전 회피 경로 (필요해지면)
+
+`docker.sock`을 어느 컨테이너에도 주지 않는 구성이 가능하다 — **DSM 작업 스케줄러**에 `deploy.sh`를 사용자 정의 스크립트로 등록하고 DSM UI에서 수동 실행하는 것이다. 호스트에서 직접 돌므로 소켓 마운트가 아예 없고, **`deploy.sh`는 그대로 쓰므로 전환 비용이 거의 없다.** 대가는 빌드 이력·파라미터·로그 열람이 Jenkins보다 빈약해지는 것이다.
+
+> **판단 기록:** Jenkins를 고른 이유는 이미 상주 중이고 브라우저에서 버튼 하나로 배포·로그 확인이 되기 때문이다(D26). 그 편의의 대가가 `docker.sock`이며, **L-1(사설망 한정)이 그 대가를 감당 가능한 수준으로 낮춘다.** L-1을 하지 않을 것이라면 Jenkins 대신 DSM 작업 스케줄러를 쓰는 편이 낫다.
+
 ### 14-5. NAS 준비 (1회, 사용자 수행)
 
+실행 순서와 확인 방법은 **[`nas_deploy_runbook.md`](nas_deploy_runbook.md)** 에 있다. 이 절은 무엇이 필요한지의 목록이다.
+
 ```
-1. <DEPLOY_DIR> 생성 후 저장소의 deploy/{docker-compose.yml,deploy.sh} 복사, chmod +x deploy.sh
-2. .env 작성 (§12-2 키 목록) — GHCR_OWNER, HK_DOCKER_NET, HK_COUCHDB_* 등
-3. bridge-dat/config.json 작성 (§8-3, P4에서)
-4. ./deploy.sh 실행 → healthz 통과 확인
-5. NAS 재부팅 후 컨테이너 자동 기동 확인 (restart: unless-stopped)
+[A] Jenkins (배포 트리거)
+  1. 기존 Jenkins 정지 → jenkins_home 백업 → 제거 → 초기화 (사용자 결정 2026-08-12)
+  2. ghcr에서 hyeseongkit-jenkins pull → deploy/jenkins/docker-compose.yml로 기동
+     ★ JENKINS_BIND를 사설망 주소로 (또는 방화벽으로 한정) — §14-4-2 L-1
+  3. 플러그인 전부 해제하고 초기 설정 → job "hk-deploy" 생성 (§14-4-1 표대로)
+[B] hyeseongkit 배포 대상
+  4. 네트워크 준비 (§1-1): docker network create → CouchDB를 추가 연결
+  5. CouchDB 계정·DB·권한 준비 (hk_hub, §12-3 F4·§2-1)
+  6. <DEPLOY_DIR> 생성 후 저장소의 deploy/{docker-compose.yml,deploy.sh} 복사, chmod +x deploy.sh
+  7. .env 작성 (§12-2 키 목록) — HK_ENCRYPTION_KEY 생성 포함
+  8. Jenkins에서 Build Now → healthz 통과 확인
+  9. (NAS) docker exec로 기기 토큰 발급 (§5-2)
+ 10. NAS 재부팅 후 컨테이너 자동 기동 확인 (restart: unless-stopped)
+  ※ bridge-dat/config.json은 P4에서 (§8-3)
 ```
 
 - **필요한 GitHub 시크릿: 없음.** 공개 저장소면 ghcr 패키지도 공개라 `GHCR_TOKEN`조차 불필요하다
-- 배포 접속 경로: Tailscale로 NAS SSH 또는 DSM 작업 스케줄러에 `deploy.sh`를 등록해 수동 실행 (폰에서도 가능)
+- 배포 접속 경로: Tailscale로 Jenkins 웹 UI (폰 브라우저 포함). **SSH를 상시 열 필요가 없다**
+- Jenkins는 CI를 하지 않는다 — 테스트·빌드·스캔은 전부 GitHub hosted 러너에서 끝난 뒤이고, Jenkins는 **pull + up + healthz만** 한다 (2코어 보호)
 
 ### 14-6. 롤백 절차
 
 ```
-NAS에서: ./deploy.sh sha-<이전커밋>      # 태그는 ghcr 패키지 페이지 또는 git log에서 확인
+Jenkins → hk-deploy → Build with Parameters → IMAGE_TAG = sha-<이전커밋> → Build
+  (태그는 ghcr 패키지 페이지 또는 git log에서 확인)
+Jenkins가 불통이면: NAS 셸에서 cd <DEPLOY_DIR> && ./deploy.sh sha-<이전커밋>
 (DB 스키마는 append-only + 인덱스 생성이 idempotent라 이미지 롤백만으로 충분)
 ```
+
+> ⚠️ **암호화 키는 롤백 대상이 아니다.** `HK_ENCRYPTION_KEY`를 바꾸면 기존 이벤트를 복호화할 수 없다 — 이미지 태그만 되돌리고 `.env`의 키는 손대지 않는다 (D29).
 
 ### 14-7. 기존 인프라 저장소(`local-llm-setup`)와의 관계
 - 기존 `pipeline.yml`(impact-analysis·performance, 데스크톱 러너)은 **변경 없음**
@@ -1378,10 +1715,12 @@ NAS에서: ./deploy.sh sha-<이전커밋>      # 태그는 ghcr 패키지 페이
 
 | # | 항목 | 해소 시점 |
 |---|---|---|
-| ~~U1~~ ✅ | **해소 (2026-08-11)** — CouchDB는 **컨테이너 주소**로 접근(§1, §12-1), 관리자 계정 보유·확인 가능. 실제 컨테이너명/네트워크명만 P1-②에서 `.env`에 기입 | — |
+| ~~U1~~ ⚠️→✅ | **1차 해소가 부정확했다 (2026-08-12 정정).** v1.6은 "컨테이너 주소로 접근 중"이라 적었으나, 실측 결과 CouchDB는 **기본 `bridge` 네트워크**에만 있어 이름 해석이 불가능했다 — 그대로 배포했다면 허브가 CouchDB를 찾지 못했을 것이다. **사용자 정의 네트워크 신설 + CouchDB 추가 연결**로 해소 (§1-1). 교훈: *"기존 운용 방식 확인됨"은 실제 명령의 출력으로만 적는다* | — |
 | U2 | livesync-bridge `config.json` 실제 필드명 (§8-3은 추정 골격) | S2 검증 단계 |
 | U3 | Codex / Antigravity MCP 설정 경로 (R14). **Codex는 IDE 확장으로 사용 확인 (2026-08-11)** → IDE 확장의 MCP 설정 경로를 실측 | P5 전 실측 |
 | ~~U4~~ ✅ | **해소 (2026-08-11)** — F2로 user 스코프 **stdio MCP**(`hk mcp serve`)가 기본이 되어 `.mcp.json` `${VAR}` 헤더 이슈 자체가 소멸 | — |
 | ~~U5~~ ✅ | **해소 (2026-08-11)** — 기존 볼트 백업 수단 **없음** → S1 전체 절차 수행. 이후 **Hyper Backup 설정 완료**로 CouchDB 측 전제는 충족(§12-4), P4에서 볼트 **파일** 백업만 확인 | — |
 | ~~U6~~ ✅ | **해소 (2026-08-11)** — D26 = **(D) 러너 없음·NAS 수동 배포** 재확정 (§14-1-1). D25·D27 포함 CI/CD 결정 완결 | — |
 | ~~U7~~ ✅ | **해소 (2026-08-11)** — 저장소 **공개** 확정 → CodeQL 무료 사용 가능, §14-3의 codeql job을 그대로 유지한다 (Semgrep 교체 불필요). ghcr 패키지도 공개가 되므로 `GHCR_TOKEN` 불필요 | — |
+| ~~U8~~ ✅ | **해소 (2026-08-12 실측)** — `/var/run/docker.sock`의 소유 그룹 GID를 확인했다. **Synology는 사용자 생성 그룹에 65536부터 GID를 부여**하므로 일반 리눅스의 `docker` 그룹(999 등)과 값의 모양이 다르다 — 추정하지 말고 `stat -c '%g'`의 출력을 그대로 `group_add`에 넣는다 (런북 §0-1) | — |
+| ~~U9~~ ✅ | **해소 (2026-08-12 실측)** — 기존 Jenkins가 쓰던 포트를 그대로 재사용하기로 확정. 허브 포트 9100이 비어 있는 것도 리슨 목록으로 확인했다. ⚠️ 확인은 반드시 `sudo netstat` — sudo 없이는 다른 사용자의 소켓이 보이지 않아 "비어 있음"이 거짓이 된다 (런북 §0-1 ②) | — |
