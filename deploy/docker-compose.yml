@@ -14,8 +14,12 @@ services:
       - vault-out:/vault-out
       - hub-data:/data           # _changes seq 체크포인트
     restart: unless-stopped
-    cpus: 1.0                    # 제약 L4
-    mem_limit: 512m
+    # 제약 L4 — ⚠️ `cpus:`(CFS 쿼터)는 Synology 커널이 지원하지 않는다
+    #   ("NanoCPUs can not be set, as your kernel does not support CPU CFS scheduler").
+    #   상대 가중치로 대체한다: 기본값이 1024이므로 512는 경합 시 CouchDB의 절반만 가져간다.
+    #   상한이 아니라 우선순위라 유휴 CPU는 그대로 쓸 수 있다 — 목적(CouchDB 굶기지 않기)에는 부합
+    cpu_shares: 512
+    mem_limit: 512m              # 메모리 cgroup은 정상 동작한다
     networks: [couchdb]
 
   # ── livesync-bridge — P4 착수 시 활성화 (사용자 결정 2026-08-12: 브리지는 P4로 이연) ──
@@ -27,7 +31,7 @@ services:
   #     - ./bridge-dat:/app/dat    # config.json (§8-3) — NAS 로컬 보관 (자격증명 포함, repo에 없음)
   #     - vault-out:/vault-out
   #   restart: unless-stopped
-  #   cpus: 0.5
+  #   cpu_shares: 256
   #   mem_limit: 512m
   #   networks: [couchdb]
 

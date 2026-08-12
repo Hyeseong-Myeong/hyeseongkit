@@ -123,7 +123,7 @@ HTTP API · MCP 도구 · CouchDB 스키마 · 인증 흐름 · 마스킹 규칙
 ### 0-5. v1.7 스펙 델타 (초기 구현에서 확정·수정된 것)
 
 v1.6 기준으로 무엇이 달라졌는지의 대조표다. **상세는 각 반영 위치를 본다** — 이 표는 추적용이며 사양의 원본이 아니다.
-21건 중 **4·5·6·17·18·20번은 구현·배포 준비 중 발견한 결함**이고(17·18은 배포를, 20은 실제로 CI를 막았다), 나머지는 사용자 결정 반영이거나 스펙 공백 보완이다.
+22건 중 **4·5·6·17·18·20·22번은 구현·배포 중 발견한 결함**이고(20·22는 실제로 CI와 컨테이너 기동을 막았다), 나머지는 사용자 결정 반영이거나 스펙 공백 보완이다.
 
 | # | 델타 | 반영 위치 | 근거 |
 |---|---|---|---|
@@ -148,6 +148,7 @@ v1.6 기준으로 무엇이 달라졌는지의 대조표다. **상세는 각 반
 | 19 | **`docker.sock` 위협 모델과 완화 계층** 명문화 (L-1~L-5), 기각 대안(socket-proxy 등) 기록, `JENKINS_BIND` 신설, T17 추가 | §14-4-2 | 사용자 지시 2026-08-12: *"docker.sock 보안 문제를 막거나 회피할 방법을 찾아 정리"* |
 | 20 | **push 전 검사 `scripts/preflight.sh` + `.gitleaksignore`** 신설, T13을 그 실행으로 재정의 | §14-2, §13 | 사용자 지시 2026-08-12: *"항상 푸시 전에는 … 검사하고 진행하도록 기록"*. 마스킹 테스트 벡터가 gitleaks에 걸려 **실제로 CI가 실패**했다 — 줄 단위 `gitleaks:allow` 주석과 지문 등록으로 해소 |
 | 21 | **배포 트리거(Jenkins)의 이미지·compose를 저장소에서 분리.** 요구사항만 §14-4-1에 규정 | §14-2, §14-4-1 | 사용자 지적 2026-08-12: *"젠킨스 이미지가 현재 레포에 귀속될 이유가 있는지"*. 기술적 필요가 없었고, **D25에서 애플리케이션을 인프라 저장소에서 분리한 논리와 어긋났다** |
+| 22 | **`cpus:` → `cpu_shares:`** (L4의 수단 변경) | §12-1, 기획서 §4-1-2 L4·R17 | **배포를 막는 결함.** Synology 커널에 CFS 쿼터가 없어 `cpus:`를 쓰면 **컨테이너 생성이 거부된다**(`NanoCPUs can not be set…`, 2026-08-12 실측). 하드 상한은 이 하드웨어에서 불가능하므로 상대 가중치로 대체하고, **L7 관측이 사실상 유일한 방어선**이 되었다 |
 
 > **P4로 이연:** livesync-bridge 관련 산출물(`bridge/`, compose 서비스, CI 빌드 스텝)은 **작성하지 않고 주석 자리 표시만 둔다** — `config.json` 실제 필드명이 미실측(U2)이고 S2 검증 전에는 가동할 수 없어, 지금 만들면 검증 불가 상태의 이미지를 계속 빌드하게 된다 (사용자 결정 2026-08-12). 사양 자체(§8-3)는 그대로 유효하다.
 
@@ -1129,8 +1130,9 @@ services:
       - vault-out:/vault-out
       - hub-data:/data           # _changes seq 체크포인트
     restart: unless-stopped
-    cpus: 1.0                    # 제약 L4
-    mem_limit: 512m
+    # 제약 L4 — ⚠️ `cpus:`(CFS 쿼터)는 Synology 커널이 지원하지 않는다 (아래 경고)
+    cpu_shares: 512
+    mem_limit: 512m              # 메모리 cgroup은 정상 동작한다
     networks: [couchdb]
 
   # ── livesync-bridge — P4에서 주석 해제 (v1.7: 사용자 결정 2026-08-12로 이연) ──
@@ -1142,7 +1144,7 @@ services:
   #     - ./bridge-dat:/app/dat    # config.json (§8-3) — NAS 로컬 보관 (자격증명 포함, repo에 없음)
   #     - vault-out:/vault-out
   #   restart: unless-stopped
-  #   cpus: 0.5
+  #   cpu_shares: 256
   #   mem_limit: 512m
   #   networks: [couchdb]
 
@@ -1155,7 +1157,15 @@ networks:
     external: true
     name: ${HK_DOCKER_NET}       # ⚠️ 네트워크 키 자체에는 변수를 쓸 수 없다 — name: 필드로만 가능
 ```
-CouchDB는 기존 컨테이너를 그대로 사용 — 이 compose에 포함하지 않고 **컨테이너 주소**(`HK_COUCHDB_URL=http://<COUCHDB_HOST>:5984`)로 접속한다 (2026-08-11 사용자 확인: 현재도 컨테이너 주소로 접근 중).
+CouchDB는 기존 컨테이너를 그대로 사용 — 이 compose에 포함하지 않고 **컨테이너 주소**(`HK_COUCHDB_URL=http://<COUCHDB_HOST>:5984`)로 접속한다.
+
+> ⚠️ **CPU 제한은 `cpus:`로 걸 수 없다 (v1.7 실측, 2026-08-12).** Synology 커널에 CFS bandwidth(쿼터)가 없어 컨테이너 생성 자체가 거부된다:
+> `Error response from daemon: NanoCPUs can not be set, as your kernel does not support CPU CFS scheduler or the cgroup is not mounted`
+>
+> **대체 수단은 `cpu_shares`(상대 가중치)** 다. 기본값 1024 대비 512면 경합 시 CouchDB의 절반만 가져간다. **상한이 아니라 우선순위**라는 점이 다르다 — 한가할 때는 여유 CPU를 다 쓸 수 있고, 붐빌 때만 양보한다. L4의 목적이 *"폭주가 CouchDB를 굶기지 않게"* 이므로 그 목적에는 부합하지만, **"최대 1코어"라는 상한은 이 하드웨어에서 강제할 수 없다**. 그만큼 L7(1주 관측)의 비중이 커진다.
+>
+> `cpu_shares`도 거부되면 CPU 제한 없이 가되, L7 관측을 앞당긴다. `mem_limit`(메모리 cgroup)은 정상 동작한다.
+> 더 강한 격리가 필요해지면 `cpuset_cpus: "0"`으로 코어를 고정해 CouchDB 몫을 물리적으로 남기는 방법이 있다 — 다만 유휴 코어를 못 쓰게 되므로 관측 결과를 보고 판단한다.
 
 > ⚠️ **Jenkins에서 실행할 때의 전제 (v1.7):** 이 compose를 Jenkins 컨테이너 안에서 돌리면 `docker compose`는 **호스트 데몬**에 명령을 보내므로(DooD), bind mount 경로와 compose 프로젝트 이름이 호스트 기준으로 해석된다. 그래서 Jenkins 컨테이너에는 `<DEPLOY_DIR>`를 **호스트와 동일한 경로**로 마운트한다 — 그러면 사람이 직접 실행하든 Jenkins가 실행하든 같은 볼륨·같은 컨테이너를 다룬다 (§14-4).
 
