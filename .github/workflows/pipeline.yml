@@ -1,0 +1,94 @@
+name: Pipeline
+
+# CI: secret-scan / lint / test / codeql 병렬 (PR + main push) — 전부 GitHub hosted 러너
+# CD: main push → publish(이미지 빌드·ghcr 푸시)까지만.
+#     실제 배포는 NAS Jenkins 수동 빌드로 사람이 실행 (D26 (D) — 러너·시크릿·인바운드 0)
+# 롤백: NAS에서 ./deploy.sh <이전-태그>  (§14-6)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read          # 기본 최소 권한. 필요한 job에서만 상향
+
+jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: gitleaks/gitleaks-action@v2
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      # 로컬 pre-commit과 동일한 pyproject.toml [tool.ruff] 설정을 읽는다 (C3)
+      - run: pip install ruff && ruff check src/ tests/ && ruff format --check src/ tests/
+
+  test:
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      couchdb:                      # 통합 테스트용 임시 CouchDB
+        image: couchdb:3
+        env: { COUCHDB_USER: ci, COUCHDB_PASSWORD: ci }
+        ports: ["5984:5984"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - run: pip install ".[hub,dev]"      # 따옴표 필수 — bash가 [hub,dev]를 글롭으로 볼 수 있다
+      - name: Unit + integration tests   # T1 마스킹 벡터 실패 시 병합 불가
+        env: { HK_COUCHDB_URL: "http://localhost:5984", HK_COUCHDB_USER: ci, HK_COUCHDB_PASSWORD: ci }
+        run: pytest -x
+
+  codeql:                                # C3 — secret-scan/lint/test와 병렬
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions: { security-events: write, actions: read, contents: read }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with: { languages: python }
+      - uses: github/codeql-action/analyze@v3
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [secret-scan, lint, test]
+    runs-on: ubuntu-latest
+    permissions: { contents: read, packages: write }
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: false }
+      - id: meta
+        run: echo "tag=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: owner
+        # ghcr 이미지명은 소문자만 허용 — repository_owner를 그대로 쓰면 실패한다
+        run: echo "lc=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+      - name: Build & push hub
+        run: |
+          IMG=ghcr.io/${{ steps.owner.outputs.lc }}/hyeseongkit-hub
+          docker build -f hub/Dockerfile -t $IMG:${{ steps.meta.outputs.tag }} -t $IMG:latest .
+          docker push --all-tags $IMG
+      # ── bridge 빌드 — P4 착수 시 복원 (사용자 결정 2026-08-12: 브리지는 P4로 이연) ──
+      # - name: Build & push bridge (핀 커밋)
+      #   run: |
+      #     IMG=ghcr.io/${{ steps.owner.outputs.lc }}/hyeseongkit-bridge
+      #     docker build -f bridge/Dockerfile -t $IMG:${{ steps.meta.outputs.tag }} -t $IMG:latest bridge/
+      #     docker push --all-tags $IMG
+      - name: 배포 안내
+        run: echo "이미지 발행 완료 — NAS Jenkins에서 deploy.sh ${{ steps.meta.outputs.tag }} 실행 (D26 (D))"

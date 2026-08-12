@@ -1,0 +1,41 @@
+# NAS 배포 compose (설계서 §12-1) — 원본은 repo deploy/, NAS <DEPLOY_DIR>/로 사용자가 복사
+# 빌드는 CI가 하고 NAS는 ghcr에서 pull만 한다 (D26 (D)).
+# CouchDB는 기존 컨테이너를 그대로 사용 — 이 compose에 포함하지 않고
+# 컨테이너 주소(HK_COUCHDB_URL)로 접속한다.
+
+services:
+  hyeseongkit-hub:
+    image: ghcr.io/${GHCR_OWNER}/hyeseongkit-hub:${IMAGE_TAG:-latest}
+    container_name: hyeseongkit-hub
+    ports:
+      - "9100:9100"
+    env_file: .env               # NAS에만 존재. HK_ADMIN_TOKEN, HK_COUCHDB_*, HK_ENCRYPTION_KEY 포함
+    volumes:
+      - vault-out:/vault-out
+      - hub-data:/data           # _changes seq 체크포인트
+    restart: unless-stopped
+    cpus: 1.0                    # 제약 L4
+    mem_limit: 512m
+    networks: [couchdb]
+
+  # ── livesync-bridge — P4 착수 시 활성화 (사용자 결정 2026-08-12: 브리지는 P4로 이연) ──
+  # 활성화 전 필수: S1 백업 → S2 테스트 DB 검증 (설계서 §8-5). 설정 전문은 §12-1.
+  # livesync-bridge:
+  #   image: ghcr.io/${GHCR_OWNER}/hyeseongkit-bridge:${IMAGE_TAG:-latest}
+  #   container_name: hk-livesync-bridge
+  #   volumes:
+  #     - ./bridge-dat:/app/dat    # config.json (§8-3) — NAS 로컬 보관 (자격증명 포함, repo에 없음)
+  #     - vault-out:/vault-out
+  #   restart: unless-stopped
+  #   cpus: 0.5
+  #   mem_limit: 512m
+  #   networks: [couchdb]
+
+volumes:
+  vault-out:
+  hub-data:
+
+networks:
+  couchdb:                       # 서비스가 참조하는 이름은 고정, 실제 네트워크명만 .env로 주입
+    external: true
+    name: ${HK_DOCKER_NET}       # ⚠️ 네트워크 키 자체에는 변수를 쓸 수 없다 — name: 필드로만 가능

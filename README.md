@@ -2,7 +2,8 @@
 
 여러 AI 서비스(Claude / Claude Code / Codex / Antigravity / 로컬 모델)를 오가며 **하나의 작업을 이어서** 하기 위한 개인용 CLI 허브. 첫 번째 기능은 **세션 영속화**다.
 
-> **상태: 설계 완료 · 구현 착수 전.** 현재 저장소에는 문서만 있다.
+> **상태: 허브·CLI·Claude Code 어댑터 구현 완료, 배포 준비 중.**
+> 볼트 렌더용 livesync-bridge는 이후 단계(P4)이고, 요약·의미 검색은 아직 없다.
 
 ## 문제
 
@@ -24,6 +25,7 @@
 - **SSOT는 DB 하나**다. 볼트는 사람이 읽기 위한 파생 뷰이며 되돌아 흐르지 않는다
 - 모든 저장은 **append-only** — 요약이 원문을 덮어쓸 수 없는 구조
 - 저장 전 **시크릿 마스킹은 fail-closed** — 실패하면 전송하지 않는다
+- 세션 본문은 **저장 시 암호화**된다. 열람용 마크다운은 허브가 복호화해 내보내므로 Obsidian에서는 평소대로 읽힌다
 
 ## 문서
 
@@ -31,6 +33,7 @@
 |---|---|
 | [기획서](docs/session_persistence_design.md) | 왜 만드는가, 무엇을 만드는가, 어떤 선택을 왜 했는가, 결정·위험 이력 |
 | [설계서](docs/session_persistence_impl_spec.md) | API·MCP·DB 스키마·인증·마스킹·렌더러·배포·CI/CD |
+| [NAS 배포 런북](docs/nas_deploy_runbook.md) | 배포 트리거(Jenkins) 설치부터 검증까지의 실행 절차 |
 
 세션 간 작업 인계 문서(이 시스템이 만들려는 산출물의 손으로 쓴 견본, Phase 0 검증 대상)는 `tmp/session_handoff.md`에 있다 — 매 세션 갱신되는 작업 상태라 커밋하지 않는다(`.gitignore`).
 
