@@ -173,7 +173,9 @@ def cmd_init(
     # [3] 어댑터 산출물
     print(f"[2] .gitignore — {_merge_gitignore(root, dry_run=dry)}")
     hk_md = root / "HYESEONGKIT.md"
-    template = _template("HYESEONGKIT.md")
+    # 템플릿 파일명이 산출물과 다른 이유: `.gitignore`가 산출물 `HYESEONGKIT.md`를 막는데(D20),
+    # 같은 이름의 템플릿까지 걸려 패키지에서 빠졌었다 (2026-08-13). 이름을 분리해 재발을 막는다
+    template = _template("hyeseongkit_manual.md")
     if not hk_md.is_file() or hk_md.read_text(encoding="utf-8") != template:
         if not dry:
             hk_md.write_text(template, encoding="utf-8", newline="\n")
