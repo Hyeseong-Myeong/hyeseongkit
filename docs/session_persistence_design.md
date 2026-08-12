@@ -422,7 +422,7 @@ v2.3에서 렌더러를 데스크톱으로 옮긴 근거는 **두 가지**였다
 │  │ ├ hyeseongkit_auth     │  │  hyeseongkit_vault   │        │
 │  │ ├ hyeseongkit_vault    │◀─┤ ※ Obsidian 불필요    │        │
 │  │ │   (세션 전용 뷰)     │  └──────────────────────┘        │
-│  │ └ obsidian_vault (기존)│   ※ D4 (C) 확정 (§4-1-3)         │
+│  │ └ <WIKI_VAULT_DB>(기존)│   ※ D4 (C) 확정 (§4-1-3)         │
 │  │   허브·브리지 접근 없음│                                   │
 │  └────────────────────────┘                                  │
 └───────────────────────────┬───────────────────────────────────┘
@@ -452,13 +452,13 @@ v2.3에서 렌더러를 데스크톱으로 옮긴 근거는 **두 가지**였다
 | **렌더러** | NAS (허브 내부) | 🆕 | 이벤트 → 마크다운. `/vault-out/sessions/`에 원자적 쓰기 |
 | **livesync-bridge** | NAS | 🆕 | `/vault-out` ↔ **세션 전용 볼트 DB** (헤드리스). **D4 (C) 확정 · 안전장치 S1·S2·S4 전제** (§4-1-3) |
 | **CouchDB `hyeseongkit_vault`** | NAS | 🆕 DB | **세션 전용 볼트 DB.** 쓰기는 브리지만 한다. 손상돼도 SSOT에서 전량 재생성 가능 |
-| CouchDB `obsidian_vault` | NAS | 기존 | LiveSync 위키 볼트. **허브·브리지 모두 접근하지 않음** (D4 (C) — DB 분리) |
+| CouchDB `<WIKI_VAULT_DB>` | NAS | 기존 | LiveSync 위키 볼트. **허브·브리지 모두 접근하지 않음** (D4 (C) — DB 분리) |
 | Bifrost / Ollama / ChromaDB | 데스크톱 | 기존 | 요약·임베딩 (선택적) |
 | `fastapi_wiki_server.py` (:9000) | 데스크톱 | 기존 | 위키 검색. **당분간 그대로 두고, 나중에 `wiki` 스킬로 흡수** |
 
 ### 4-4. livesync-bridge — 검증 결과
 
-> **상태: 채택 확정 (D4 (C), 2026-08-11).** 대상은 **세션 전용 DB `hyeseongkit_vault`** — 기존 위키 볼트 DB(`obsidian_vault`)에는 연결하지 않는다.
+> **상태: 채택 확정 (D4 (C), 2026-08-11).** 대상은 **세션 전용 DB `hyeseongkit_vault`** — 기존 위키 볼트 DB(`<WIKI_VAULT_DB>`)에는 연결하지 않는다.
 > **철회 조건:** LiveSync 버전 업그레이드 때마다 포맷 불일치로 유지보수 부담이 커지면 (B) 데스크톱 렌더러로 후퇴.
 
 검증 결과 (2026-08-10 확인)
