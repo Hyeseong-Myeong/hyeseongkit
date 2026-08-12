@@ -6,8 +6,9 @@
 # 아래는 그 주석을 달기 전 커밋들이라 지문으로만 해소할 수 있다.
 #
 # ⚠️ 새 항목을 추가할 때는 반드시 "왜 안전한가"를 함께 적는다. 근거 없는 예외는 추가하지 않는다.
+# ⚠️ 근거를 적을 때 **문제의 값을 그대로 옮겨 적지 않는다** — 이 파일도 스캔 대상이라 그 줄이 다시 걸린다.
 
-# `hk doctor`의 마스킹 자가검증 — "password: abcd1234efgh"는 사람이 지어낸 값이다
+# `hk doctor`의 마스킹 자가검증에 쓰는 가짜 자격증명 (사람이 지어낸 값)
 15456c275090f4bbdadb30c7edd494a676612a9e:src/hyeseongkit/cli/doctor.py:generic-api-key:56
 
 # §6-5 테스트 벡터 — MK08(키 이름 보존)과 MK02(AWS 키 형식) 검증용
@@ -17,3 +18,6 @@
 
 # 설계서 §6-5의 같은 벡터를 표로 옮긴 줄
 fe715956612154293b20259a3275aeebe31643d1:docs/session_persistence_impl_spec.md:generic-api-key:683
+
+# 이 파일의 주석이 스스로 걸렸던 건 (596353c) — 아래 커밋에서 값을 지웠다
+596353c326407fb63bd98b5d064de99720dca780:.gitleaksignore:generic-api-key:10
