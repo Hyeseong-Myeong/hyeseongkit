@@ -16,7 +16,7 @@
 | v1.4 | **검토 피드백 F1~F4·C1~C5 반영** — F1(a) know 이월 보존(§2-4) / F2 어댑터를 기기 단위 `hk setup`으로 재설계, 산출물 전부 비커밋, U4 해소(§9~§10) / F3 CouchDB 백업 정책 신설(§12-4) / F4 계정 분리 절차(§12-3) / C1 canonical aliases(§7) / C2 MK08 오탐 축소(§6) / C3 CodeQL+로컬 lint(§14) / C4 resume 패킷에 활성 스레드 목록(§3-7) / C5 방화벽은 추후 반영 명기(§1) | 2026-08-11 사용자 회신 |
 | v1.5 | **C1 보강 — `hk link` 수동 매칭 신설** (사용자 제안 채택): 개명·오분기 시 기존 프로젝트에 수동 연결 + `hk init` 오분기 방지 가드. `hk init --rename`은 `hk link`로 통합 (§7, §3-2, §11-2) | 2026-08-11 사용자 회신: *"수동으로 기존 세션과 매칭할 수 있는 기능"* |
 | v1.6 | **D26 재결정 → (D) 러너 없음·NAS 수동 배포** (§14-1-1 (D), §14-3~14-6 재작성, deploy job 제거) / **D28 플레이스홀더 규약 신설**(§0-3-1) 및 문서 전반 고유값 치환 / `.env.example` 재편(§12-2) / 외부 기여 정책(§14-8) / 수용 기준 T11~T13 갱신 | 2026-08-11 사용자 회신: self-hosted 러너 미사용 + 민감정보 `.env` 이전 |
-| **v1.7** | **초기 구현(P1~P3) 반영 — 스펙 델타 16건(§0-5).** ① `slug` 필드 + 409 `THREAD_EXISTS`(D30) ② D29 암호화에 `title` 포함·`enc` 블록 확정 ③ evt `ord` 필드 ④ 쓰기 후 **뷰 즉시 fold**(렌더는 계속 비동기) ⑤ 마스킹 `re.ASCII` ⑥ §6-5 벡터 표기 정정 ⑦ `GET /v1/projects` 목록·`name` 검색 ⑧ `mask_report` 전달 ⑨ `hk init --force-new` ⑩ 훅 모드 큐 flush 생략 ⑪ MCP SDK 2.0 ⑫ 허브 MCP도 치환 마스킹 ⑬ `~/.hyeseongkit/config.toml` 전문 ⑭ `HK_DEVICE_ID`/`HK_TOOL` 키 ⑮ bridge P4 이연 ⑯ 저장 인터페이스 확장 **⑰ DB·인덱스 생성 권한** **⑱ 허브↔CouchDB 전용 네트워크**(⑰·⑱은 배포를 막던 결함) **⑲ `docker.sock` 위협·완화 명문화** **⑳ push 전 검사 스크립트·gitleaks 설정**. **§14-4~14-6을 NAS Jenkins 수동 트리거로 재작성**(D26 갱신), `deploy/jenkins/` 신설, 런북 분리 | 2026-08-12 구현 세션 + 사용자 회신 (스레드 ID·title 암호화·bridge 이연·Jenkins 3항·네트워크 방식·docker.sock 정리 지시) |
+| **v1.7** | **초기 구현(P1~P3) 반영 — 스펙 델타 16건(§0-5).** ① `slug` 필드 + 409 `THREAD_EXISTS`(D30) ② D29 암호화에 `title` 포함·`enc` 블록 확정 ③ evt `ord` 필드 ④ 쓰기 후 **뷰 즉시 fold**(렌더는 계속 비동기) ⑤ 마스킹 `re.ASCII` ⑥ §6-5 벡터 표기 정정 ⑦ `GET /v1/projects` 목록·`name` 검색 ⑧ `mask_report` 전달 ⑨ `hk init --force-new` ⑩ 훅 모드 큐 flush 생략 ⑪ MCP SDK 2.0 ⑫ 허브 MCP도 치환 마스킹 ⑬ `~/.hyeseongkit/config.toml` 전문 ⑭ `HK_DEVICE_ID`/`HK_TOOL` 키 ⑮ bridge P4 이연 ⑯ 저장 인터페이스 확장 **⑰ DB·인덱스 생성 권한** **⑱ 허브↔CouchDB 전용 네트워크**(⑰·⑱은 배포를 막던 결함) **⑲ `docker.sock` 위협·완화 명문화** **⑳ push 전 검사 스크립트·gitleaks 예외** **㉑ 배포 트리거 구현을 저장소에서 분리**. **§14-4~14-6을 NAS Jenkins 수동 트리거로 재작성**(D26 갱신), 런북 분리 | 2026-08-12 구현 세션 + 사용자 회신 (스레드 ID·title 암호화·bridge 이연·Jenkins 3항·네트워크 방식·docker.sock 정리 지시) |
 
 ## 0. 범위와 전제
 
@@ -123,7 +123,7 @@ HTTP API · MCP 도구 · CouchDB 스키마 · 인증 흐름 · 마스킹 규칙
 ### 0-5. v1.7 스펙 델타 (초기 구현에서 확정·수정된 것)
 
 v1.6 기준으로 무엇이 달라졌는지의 대조표다. **상세는 각 반영 위치를 본다** — 이 표는 추적용이며 사양의 원본이 아니다.
-20건 중 **4·5·6·17·18·20번은 구현·배포 준비 중 발견한 결함**이고(17·18은 배포를, 20은 CI를 막았을 것이다), 나머지는 사용자 결정 반영이거나 스펙 공백 보완이다.
+21건 중 **4·5·6·17·18·20번은 구현·배포 준비 중 발견한 결함**이고(17·18은 배포를, 20은 실제로 CI를 막았다), 나머지는 사용자 결정 반영이거나 스펙 공백 보완이다.
 
 | # | 델타 | 반영 위치 | 근거 |
 |---|---|---|---|
@@ -146,7 +146,8 @@ v1.6 기준으로 무엇이 달라졌는지의 대조표다. **상세는 각 반
 | 17 | **DB·인덱스는 관리자가 선행 생성**, 허브는 존재 확인만. 권한 부족 시 조치 방법을 담은 메시지와 함께 기동 중단 | §2-1, §12-3 | **배포를 막을 결함.** v1.6은 "허브 최초 기동 시 `PUT /{db}`"라고 적었지만, F4로 분리한 `hk_hub`는 서버 관리자가 아니라 **DB를 만들 수 없고** Mango 인덱스(설계 문서)도 DB 관리자 권한이 필요하다 |
 | 18 | **허브↔CouchDB 전용 사용자 정의 네트워크** 신설 + `deploy.sh`의 idempotent 재연결(자가 복구). `HK_COUCHDB_CONTAINER` 키 추가 | §1-1, §14-4 | **배포를 막을 결함.** CouchDB가 기본 `bridge`에만 있어 **컨테이너 이름이 해석되지 않았다**(기본 브리지에는 내장 DNS가 없다). U1의 1차 해소가 부정확했다 |
 | 19 | **`docker.sock` 위협 모델과 완화 계층** 명문화 (L-1~L-5), 기각 대안(socket-proxy 등) 기록, `JENKINS_BIND` 신설, T17 추가 | §14-4-2 | 사용자 지시 2026-08-12: *"docker.sock 보안 문제를 막거나 회피할 방법을 찾아 정리"* |
-| 20 | **push 전 검사 `scripts/preflight.sh` + `.gitleaks.toml`** 신설, T13을 그 실행으로 재정의 | §14-2, §13 | 사용자 지시 2026-08-12: *"항상 푸시 전에는 … 검사하고 진행하도록 기록"*. 마스킹 테스트 벡터가 gitleaks에 걸려 **CI가 실패했을 것**이라 예외 설정이 함께 필요했다 |
+| 20 | **push 전 검사 `scripts/preflight.sh` + `.gitleaksignore`** 신설, T13을 그 실행으로 재정의 | §14-2, §13 | 사용자 지시 2026-08-12: *"항상 푸시 전에는 … 검사하고 진행하도록 기록"*. 마스킹 테스트 벡터가 gitleaks에 걸려 **실제로 CI가 실패**했다 — 줄 단위 `gitleaks:allow` 주석과 지문 등록으로 해소 |
+| 21 | **배포 트리거(Jenkins)의 이미지·compose를 저장소에서 분리.** 요구사항만 §14-4-1에 규정 | §14-2, §14-4-1 | 사용자 지적 2026-08-12: *"젠킨스 이미지가 현재 레포에 귀속될 이유가 있는지"*. 기술적 필요가 없었고, **D25에서 애플리케이션을 인프라 저장소에서 분리한 논리와 어긋났다** |
 
 > **P4로 이연:** livesync-bridge 관련 산출물(`bridge/`, compose 서비스, CI 빌드 스텝)은 **작성하지 않고 주석 자리 표시만 둔다** — `config.json` 실제 필드명이 미실측(U2)이고 S2 검증 전에는 가동할 수 없어, 지금 만들면 검증 불가 상태의 이미지를 계속 빌드하게 된다 (사용자 결정 2026-08-12). 사양 자체(§8-3)는 그대로 유효하다.
 
@@ -680,7 +681,7 @@ Bearer 추출 → sha256 → hyeseongkit_auth에서 idx-token 조회
 | 입력 | 기대 |
 |---|---|
 | `OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwx` | **MK05** 적중 — `sk-...` 잔존 없음 <sub>(v1.7 정정: v1.6은 MK08로 적었으나 `OPENAI_API_KEY`는 `_` 때문에 MK08의 `\b(api[_-]?key\|…)` 경계가 성립하지 않아 매치되지 않는다. 값은 MK05가 잡으므로 **결과는 동일**)</sub> |
-| `api_key=abcdefgh1234` | MK08 적중, 키 이름 보존 → `api_key=⟦REDACTED:MK08⟧` |
+| `api_key=abcdefgh1234` | MK08 적중, 키 이름 보존 → `api_key=⟦REDACTED:MK08⟧` |<!-- gitleaks:allow -->
 | `Authorization: Bearer eyJhbGciOi.eyJzdWIi.SflKxwRJ` | MK07 또는 MK09 적중 |
 | `http://user:pass1234@nas.local:5984` | MK10 → `⟦REDACTED:MK10⟧nas.local:5984` |
 | `100.64.0.1에 배포` (CGNAT 대역 예시) | MK11 적중 — **`re.ASCII` 없으면 실패한다** (§6-2 경고) |
@@ -1205,16 +1206,7 @@ docker run --rm python:3.11-slim sh -c "pip install -q cryptography && python -c
 
 > 허브는 이 키가 없거나 형식이 틀리면 **기동하지 않는다** — 평문으로 흘러가는 경로를 만들지 않기 위한 fail-closed다 (D29).
 
-**Jenkins compose 전용 키** (`<JENKINS_DIR>/.env` — 허브의 `.env`와 별도 파일):
-
-```
-GHCR_OWNER=""            # ghcr 네임스페이스 (소문자)
-JENKINS_PORT=""          # 확인은 반드시 sudo netstat -tlnp (sudo 없이는 남의 소켓이 안 보인다)
-JENKINS_BIND=""          # 리슨 인터페이스 주소. Tailscale 주소 권장 — docker.sock 방어선 (§14-4-2 L-1)
-JENKINS_HOME_DIR=""      # Hyper Backup 대상에 포함할 것 (§12-4)
-DEPLOY_DIR=""            # 허브 배포 디렉터리. 호스트 경로 그대로 (§14-4-1 전제 3)
-DOCKER_GID=""            # stat -c '%g' /var/run/docker.sock 의 출력값 그대로
-```
+> 배포 트리거(Jenkins)의 설정 키는 **인프라 쪽 `.env`에 있다** — 이 저장소의 관심사가 아니다 (§14-4-1). 다만 그 설정이 만족해야 할 조건(사설망 바인딩, `DEPLOY_DIR` 동일 경로 마운트, `docker.sock` 접근)은 §14-4-1·§14-4-2에 규정되어 있다.
 
 ### 12-3. 배포 순서 (P1·P4)
 
@@ -1418,17 +1410,16 @@ hyeseongkit/
 ├── hub/Dockerfile          # 허브 이미지 (pip install .[hub])
 ├── deploy/
 │   ├── docker-compose.yml  #   §12-1의 원본. 사용자가 NAS로 복사
-│   ├── deploy.sh           #   §14-4. Jenkins job과 사람이 같은 스크립트를 쓴다
-│   └── jenkins/            #   (v1.7) 배포 트리거용 Jenkins 자체 구성 — Dockerfile + compose
+│   └── deploy.sh           #   §14-4. 배포 트리거와 사람이 같은 스크립트를 쓴다
 ├── bridge/                 # (P4에서 신설) livesync-bridge 핀 커밋 빌드
 ├── scripts/preflight.sh    # (v1.7) push 전 검사 — 고유값·시크릿·lint·테스트
 ├── tests/                  # 마스킹 벡터(§6-5) 포함
-├── .gitleaks.toml          # (v1.7) CI secret-scan과 preflight가 공유. 예외는 근거 주석 필수
+├── .gitleaksignore         # (v1.7) 검토 후 안전 판정한 발견의 지문. 예외는 근거 주석 필수
 ├── .pre-commit-config.yaml # 로컬 lint (C3): ruff check + ruff format — CI와 동일 규칙
-└── .github/workflows/
-    ├── pipeline.yml        #   CI + 허브 이미지 발행 (§14-3)
-    └── jenkins-image.yml   #   (v1.7) Jenkins 이미지 발행 — deploy/jenkins/ 변경 시·수동
+└── .github/workflows/pipeline.yml   # CI + 허브 이미지 발행 (§14-3)
 ```
+
+> **여기 없는 것:** 배포 트리거(Jenkins)의 이미지·compose. **인프라이지 이 애플리케이션의 산출물이 아니다** — 인프라 저장소가 관리한다 (§14-4-1). 이 저장소는 트리거가 만족해야 할 조건만 규정한다.
 
 **lint 단일화 (C3):** 규칙은 `pyproject.toml [tool.ruff]` 한 곳에만 둔다. 로컬은 `pre-commit install` 후 커밋마다 자동 실행(또는 수동 `ruff check .`), CI의 lint job도 같은 설정을 읽는다 — 로컬과 CI 결과가 항상 일치.
 
@@ -1542,7 +1533,9 @@ jobs:
         run: echo "이미지 발행 완료 — NAS Jenkins에서 IMAGE_TAG=${{ steps.meta.outputs.tag }}로 배포 (D26 (D))"
 ```
 
-**Jenkins 이미지 워크플로 `.github/workflows/jenkins-image.yml` (v1.7):** `deploy/jenkins/**` 변경 시 + `workflow_dispatch`로만 돌며, `ghcr.io/<GHCR_OWNER>/hyeseongkit-jenkins`를 발행한다. 배포 파이프라인과 수명주기가 다르므로(거의 바뀌지 않는다) 본 파이프라인에 섞지 않는다. 빌드를 NAS에서 하지 않는 이유는 §14-1의 원칙 그대로 — **2코어를 지키기 위해 NAS는 pull과 up만 한다.**
+**이 파이프라인이 만드는 것은 허브 이미지 하나뿐이다.** 배포 트리거(Jenkins)의 이미지는 여기서 만들지 않는다 — 인프라의 산출물이고 1년에 두어 번 바뀌므로, 애플리케이션의 릴리스 주기에 얹을 이유가 없다 (§14-4-1).
+
+> §14-1의 "NAS는 pull과 up만"은 **반복되는 파이프라인 빌드**에 대한 제약이다. 인프라를 세울 때의 **1회성 이미지 빌드**는 여기에 해당하지 않는다 — 2코어에서 몇 분 걸리는 일을 한 번 하는 것과, 커밋마다 하는 것은 다른 문제다.
 
 **병렬성 (C3):** CI 4개 job(secret-scan/lint/test/codeql)은 전부 병렬이다. `publish`는 [secret-scan, lint, test]만 기다린다 — CodeQL(수 분 소요)은 병렬로 돌고 결과가 Security 탭에 남으므로, **NAS에서 배포를 실행하기 전에 확인**한다. 검사를 유지하면서 발행 시간을 늘리지 않는 구성이다.
 
@@ -1601,13 +1594,19 @@ echo "healthz 실패 — 롤백 검토 (§14-6)"; exit 1
 >
 > 대가: **job 정의가 버전 관리되지 않는다.** 그래서 `jenkins_home`이 §12-4 백업 대상에 포함되어야 하고, 위 표가 그 job의 사양 기록 역할을 한다 (표만 보고 재생성 가능해야 한다).
 
-**DooD 전제 3가지** — Jenkins 컨테이너가 호스트 Docker를 조종하므로 다음이 성립해야 한다:
+**배포 트리거의 요구사항 (구현은 이 저장소 밖)**
+
+> **Jenkins 자체는 이 저장소의 산출물이 아니다** (2026-08-12 정정). hyeseongkit은 애플리케이션이고 Jenkins는 인프라다 — **D25에서 hyeseongkit을 인프라 저장소에서 분리한 논리가 그대로 적용된다.** 초안은 "CI가 이미 여기 있어서" 이미지 빌드를 이 저장소에 두었는데, 기술적 필요가 없는 편의상의 선택이었다. Jenkins 이미지·compose는 인프라 저장소가 관리하고, 여기서는 **무엇을 만족해야 하는지**만 규정한다.
+
+배포 트리거가 무엇이든(Jenkins든 DSM 작업 스케줄러든) 다음 세 가지가 성립해야 `deploy.sh`가 동작한다:
 
 | # | 조건 | 성립하지 않으면 |
 |---|---|---|
-| 1 | `/var/run/docker.sock` 마운트 + 접근 권한(그룹) | `docker: command not found`가 아니라 **permission denied** |
-| 2 | Jenkins 이미지에 **docker CLI + compose 플러그인** 포함 | 공식 `jenkins/jenkins:lts`에는 없다 → `deploy/jenkins/Dockerfile`로 만들어 ghcr에서 pull (§14-3) |
-| 3 | `<DEPLOY_DIR>`를 **호스트와 동일한 경로로** 마운트 | compose의 bind mount(`./bridge-dat` 등)와 프로젝트 이름이 호스트 기준으로 해석되므로, 경로가 다르면 **볼륨이 갈라지거나 마운트가 실패**한다 (§12-1 경고) |
+| 1 | `/var/run/docker.sock` 접근 권한 | **permission denied** (`docker: command not found`와 구분할 것) |
+| 2 | **docker CLI + compose 플러그인**을 실행할 수 있을 것 | 공식 `jenkins/jenkins:lts`에는 docker CLI가 없다 — CLI만 더한 이미지가 필요하다(데몬은 넣지 않는다) |
+| 3 | 컨테이너에서 실행한다면 `<DEPLOY_DIR>`를 **호스트와 동일한 경로로** 마운트 | compose의 bind mount와 프로젝트 이름이 호스트 기준으로 해석되므로, 경로가 다르면 **볼륨이 갈라지거나 마운트가 실패**한다 (§12-1 경고) |
+
+세 조건은 **T14**로 검증한다. 호스트에서 직접 실행하는 방식(DSM 작업 스케줄러)이면 1·2는 자동으로 성립하고 3은 해당 없다.
 
 ### 14-4-2. `docker.sock` 노출 — 위협과 완화 (v1.7 신설, 사용자 지시 2026-08-12)
 
@@ -1654,10 +1653,10 @@ A2를 구조적으로 없앤 것이 이 설계의 핵심이다. 남은 A1·A3·A
 실행 순서와 확인 방법은 **[`nas_deploy_runbook.md`](nas_deploy_runbook.md)** 에 있다. 이 절은 무엇이 필요한지의 목록이다.
 
 ```
-[A] Jenkins (배포 트리거)
+[A] 배포 트리거 (인프라 — 이 저장소 밖. 요구사항은 §14-4-1)
   1. 기존 Jenkins 정지 → jenkins_home 백업 → 제거 → 초기화 (사용자 결정 2026-08-12)
-  2. ghcr에서 hyeseongkit-jenkins pull → deploy/jenkins/docker-compose.yml로 기동
-     ★ JENKINS_BIND를 사설망 주소로 (또는 방화벽으로 한정) — §14-4-2 L-1
+  2. docker CLI를 갖춘 Jenkins 이미지로 기동
+     ★ 사설망 인터페이스에만 바인드 (또는 방화벽으로 한정) — §14-4-2 L-1
   3. 플러그인 전부 해제하고 초기 설정 → job "hk-deploy" 생성 (§14-4-1 표대로)
 [B] hyeseongkit 배포 대상
   4. 네트워크 준비 (§1-1): docker network create → CouchDB를 추가 연결

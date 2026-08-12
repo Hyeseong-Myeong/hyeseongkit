@@ -18,7 +18,10 @@
   sh scripts/preflight.sh      # 통과(exit 0)하지 않으면 push하지 않는다
   ```
 
-  이 스크립트가 검사하는 것: ① Tailscale·사설 IP ② NAS 실경로 ③ 호스트명·계정명 ④ 개발 기기 절대경로 ⑤ 토큰·키 패턴 ⑥ `.env.example`에 값이 채워졌는지 ⑦ `tmp/`·`.env`·`.venv`가 커밋 대상에 섞였는지 ⑧ `ruff check`/`ruff format` ⑨ `pytest`.
+  이 스크립트가 검사하는 것: ① Tailscale·사설 IP ② NAS 실경로 ③ 호스트명·계정명 ④ 개발 기기 절대경로 ⑤ 토큰·키 패턴 ⑥ `.env.example`에 값이 채워졌는지 ⑦ `tmp/`·`.env`·`.venv`가 커밋 대상에 섞였는지 ⑧ **gitleaks(CI와 같은 도구·같은 기본 규칙)** ⑨ `ruff check`/`ruff format` ⑩ `pytest`.
+
+  - **gitleaks가 로컬에 없으면 그 항목은 건너뛴다.** 실제로 그래서 CI에서야 secret-scan 실패를 발견한 적이 있다 (2026-08-12). `winget install Gitleaks.Gitleaks`로 설치해 두면 push 전에 잡힌다.
+  - gitleaks 예외는 **줄 단위 `gitleaks:allow` 주석**(반드시 같은 줄에)과 `.gitleaksignore`(지문)로만 둔다. 전용 설정 파일은 쓰지 않는다 — 경로 기반 allowlist는 기대대로 동작하지 않았다.
 
   - **스크립트 통과가 면제가 아니다.** 자동 스캐너는 *패턴이 알려진 것*만 잡는다 — 새로 생긴 종류의 고유값(새 컨테이너 이름, 새 포트, 새 경로)은 **사람이 diff를 읽어야** 걸러진다. 통과 후에도 `git diff --cached`를 눈으로 훑는다.
   - 새로운 고유값 종류가 생기면 **`scripts/preflight.sh`에 검사 항목을 추가**한다. 한 번 빠져나간 패턴은 다음에도 빠져나간다.

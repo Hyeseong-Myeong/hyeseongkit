@@ -1,0 +1,19 @@
+# gitleaks 예외 — 검토 후 안전으로 판정한 발견만 지문으로 등록한다.
+#
+# 여기 있는 것은 전부 **마스킹 규칙(설계서 §6)을 검증하기 위한 합성 문자열**이다.
+# 규칙이 진짜 시크릿을 잡는지 보려면 시크릿과 같은 형식이어야 하고, 그래서 스캐너에도 걸린다.
+# 이후 커밋에는 각 줄에 `gitleaks:allow` 주석을 달아 두었으므로 새로 걸리지 않는다.
+# 아래는 그 주석을 달기 전 커밋들이라 지문으로만 해소할 수 있다.
+#
+# ⚠️ 새 항목을 추가할 때는 반드시 "왜 안전한가"를 함께 적는다. 근거 없는 예외는 추가하지 않는다.
+
+# `hk doctor`의 마스킹 자가검증 — "password: abcd1234efgh"는 사람이 지어낸 값이다
+15456c275090f4bbdadb30c7edd494a676612a9e:src/hyeseongkit/cli/doctor.py:generic-api-key:56
+
+# §6-5 테스트 벡터 — MK08(키 이름 보존)과 MK02(AWS 키 형식) 검증용
+89ff22f73d2725bb80e58b1a79ce962d8d7c8d5c:tests/test_redact.py:generic-api-key:51
+89ff22f73d2725bb80e58b1a79ce962d8d7c8d5c:tests/test_redact.py:aws-access-token:84
+89ff22f73d2725bb80e58b1a79ce962d8d7c8d5c:tests/test_redact.py:aws-access-token:89
+
+# 설계서 §6-5의 같은 벡터를 표로 옮긴 줄
+fe715956612154293b20259a3275aeebe31643d1:docs/session_persistence_impl_spec.md:generic-api-key:683

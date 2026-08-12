@@ -46,7 +46,7 @@ synopkg list 2>/dev/null | grep -i jenkins
 | # | 단계 | 결과물 | 되돌리기 |
 |---|---|---|---|
 | §2 | 기존 Jenkins 백업 → 제거 → `jenkins_home` 초기화 | `<BACKUP_DIR>/jenkins_home-<날짜>.tar.gz` + 빈 `jenkins_home` | 아카이브 + `.old-<날짜>` 폴더 |
-| §3 | Jenkins 재설치 | `hyeseongkit-jenkins` 컨테이너 | 컨테이너 삭제 후 재실행 |
+| §3 | Jenkins 재설치 (이미지 빌드 포함) | Jenkins 컨테이너 | 컨테이너 삭제 후 재실행 |
 | §4 | `hk-deploy` job 생성 | Build Now 버튼 | job 삭제 |
 | §5 | **CPU 기준선 재기록** | `tmp/cpu_baseline.md` 갱신 | — |
 | §6 | CouchDB 네트워크 연결 + 계정·DB·권한 준비 | 전용 네트워크 + `hk_hub` 계정 + DB 3개 | `network disconnect` / 계정·DB 삭제 |
@@ -119,7 +119,7 @@ sudo tar tzf <BACKUP_DIR>/jenkins_home-*.tar.gz | grep -E '(config\.xml|secrets/
 docker rm <기존-jenkins-컨테이너>
 ```
 
-- 기존 이미지가 `jenkins/jenkins:lts`라면 **지우지 않아도 된다** — 새 이미지(`hyeseongkit-jenkins`)가 이것을 베이스로 하므로 레이어를 재사용해 pull이 빨라진다. 디스크를 정리하고 싶을 때만 `docker rmi`
+- 기존 이미지가 `jenkins/jenkins:lts` 계열이라면 **지우지 않아도 된다** — 새 이미지가 이것을 베이스로 하므로 레이어를 재사용해 빌드가 빨라진다. 디스크를 정리하고 싶을 때만 `docker rmi`
 - **named volume은 자동으로 지워지지 않는다.** `docker rm`만으로는 데이터가 남으므로, §2-2 백업을 마친 뒤 `docker volume rm <이름>`으로 명시적으로 지운다 (남겨 두어도 무해하다 — 새 Jenkins는 다른 볼륨을 쓴다)
 - Container Manager의 **프로젝트**로 만들었다면 GUI에서 프로젝트를 중지·삭제하는 편이 깔끔하다 (compose 파일까지 함께 정리된다)
 
@@ -150,9 +150,11 @@ sudo chown -R 1000:1000 <JENKINS_HOME_DIR>
 
 ## 3. Jenkins 재설치
 
-이미지는 **GitHub CI가 만들어 ghcr에 올린 것을 pull만** 한다 — NAS 2코어를 빌드에 쓰지 않는다 (설계서 §14-1).
-
-> ⚠️ **선행 조건:** 이미지를 만드는 워크플로(`.github/workflows/jenkins-image.yml`)가 **main에 있어야** 한다. 아직 머지되지 않았다면 이 단계 전에 커밋·머지하고, GitHub Actions에서 **`Jenkins Image`를 수동 실행**(`workflow_dispatch`)해 발행한다. 발행 확인: 저장소 → Packages에 `hyeseongkit-jenkins`.
+> **Jenkins는 이 저장소의 산출물이 아니다** (설계서 §14-4-1). hyeseongkit은 "배포 트리거가 무엇을 만족해야 하는가"만 규정하고, 이미지·compose는 **인프라 저장소**가 관리한다.
+>
+> 필요한 것은 **docker CLI와 compose 플러그인을 갖춘 Jenkins 이미지** 하나다. 공식 `jenkins/jenkins:lts`에는 docker CLI가 없어 그대로는 배포를 실행할 수 없다. 데몬은 넣지 않는다(DooD — 호스트 데몬을 소켓으로 조종).
+>
+> 이미지는 **NAS에서 1회 빌드**하면 된다. §14-1의 "NAS는 pull과 up만"은 반복되는 파이프라인 빌드에 대한 제약이지, 인프라를 세울 때의 1회성 빌드에는 해당하지 않는다.
 
 ### 3-1. 디렉터리와 설정
 
@@ -164,24 +166,28 @@ chown -R 1000:1000 <JENKINS_HOME_DIR>
 
 (§2-4에서 이미 만들고 `chown` 했다면 그대로 둔다.)
 
-저장소의 `deploy/jenkins/docker-compose.yml`을 `<JENKINS_DIR>/docker-compose.yml`로 복사하고,
-같은 위치에 `.env`를 만든다 (`deploy/jenkins/.env.example`의 키 목록 참조 — 값은 §0-1에서 실측한 것):
+`<JENKINS_DIR>`에 Dockerfile과 compose를 두고(인프라 저장소에서 가져온다), `.env`에 값을 채운다:
 
 ```
-GHCR_OWNER=...
-JENKINS_PORT=...
-JENKINS_HOME_DIR=...
+JENKINS_PORT=...        # §0-1 ②에서 확인한 빈 포트
+JENKINS_BIND=...        # 사설망(Tailscale) 주소 — §3-3-1
+JENKINS_HOME_DIR=...    # §2-4에서 비운 그 경로
 DEPLOY_DIR=...          # §7에서 만들 허브 배포 디렉터리 (지금 정해 둔다)
 DOCKER_GID=...          # stat -c '%g' /var/run/docker.sock 의 값
 ```
 
-> `DEPLOY_DIR`는 **호스트 경로 그대로** 넣는다. compose가 이 경로를 컨테이너 안에도 **같은 이름으로** 마운트한다 — 그래야 Jenkins가 실행하든 사람이 실행하든 동일한 볼륨·컨테이너를 다룬다 (설계서 §14-4-1 전제 3).
+이미지를 빌드한다 (1회, 몇 분 소요):
+
+```sh
+cd <JENKINS_DIR> && docker build -t hyeseongkit-jenkins:local .
+```
+
+> `DEPLOY_DIR`는 **호스트 경로 그대로** 넣고, compose에서 컨테이너 안에도 **같은 이름으로** 마운트한다 — 그래야 Jenkins가 실행하든 사람이 실행하든 동일한 볼륨·컨테이너를 다룬다 (설계서 §14-4-1 요구사항 3).
 
 ### 3-2. 기동
 
 ```sh
 cd <JENKINS_DIR>
-docker compose pull
 docker compose up -d
 docker compose logs -f          # "Jenkins is fully up and running" 대기 (첫 기동은 1~2분)
 ```
@@ -228,7 +234,7 @@ docker exec hyeseongkit-jenkins docker ps
 
 | 증상 | 원인 | 조치 |
 |---|---|---|
-| `docker: not found` | 공식 이미지를 그대로 씀 | `ghcr.io/<GHCR_OWNER>/hyeseongkit-jenkins`를 쓰는지 확인 |
+| `docker: not found` | 공식 이미지를 그대로 씀 | docker CLI를 더한 이미지로 빌드했는지 확인 (§3-1) |
 | `permission denied ... docker.sock` | `DOCKER_GID` 불일치 | `stat -c '%g' /var/run/docker.sock` 재확인 후 `.env` 수정 → `docker compose up -d` |
 | `Cannot connect to the Docker daemon` | 소켓 미마운트 | compose의 volumes 확인 |
 

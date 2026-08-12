@@ -48,7 +48,7 @@ def test_vector_no_false_positive_korean_prose():
 
 
 def test_mk08_keeps_key_name():
-    masked, hits = redact.mask("client_secret: abcdef123456")
+    masked, hits = redact.mask("client_secret: abcdef123456")  # gitleaks:allow
     assert "MK08" in hits
     assert masked.startswith("client_secret: ")
     assert "abcdef123456" not in masked
@@ -81,12 +81,12 @@ def test_extra_rule_applied():
 
 
 def test_detect_mode_reports_raw_matches():
-    assert redact.detect("AKIAABCDEFGHIJKLMNOP") == ["MK02"]
+    assert redact.detect("AKIAABCDEFGHIJKLMNOP") == ["MK02"]  # gitleaks:allow
     assert redact.detect("이미 처리됨 ⟦REDACTED:MK02⟧") == []
 
 
 def test_mask_obj_nested():
-    obj = {"title": "제목", "sections": {"know": "key AKIAABCDEFGHIJKLMNOP"}}
+    obj = {"title": "제목", "sections": {"know": "key AKIAABCDEFGHIJKLMNOP"}}  # gitleaks:allow
     masked, hits = redact.mask_obj(obj)
     assert "MK02" in hits
     assert "AKIA" not in masked["sections"]["know"]

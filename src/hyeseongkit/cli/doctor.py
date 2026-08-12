@@ -53,7 +53,8 @@ def cmd_doctor(
 
     # [6] 푸시 드라이런 — healthz + 스키마·마스킹 자가검증 (전송 없음)
     try:
-        masked, _ = redact.mask("password: abcd1234efgh")
+        # 아래 값은 마스킹이 실제로 동작하는지 보려고 지어낸 가짜다
+        masked, _ = redact.mask("password: abcd1234efgh")  # gitleaks:allow
         ok = "abcd1234efgh" not in masked and (healthz is not None or client is None)
         _check("푸시 드라이런 (스키마·마스킹 자가검증)", ok)
     except redact.RedactionError as exc:

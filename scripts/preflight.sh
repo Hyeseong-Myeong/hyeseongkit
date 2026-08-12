@@ -75,10 +75,15 @@ else
   echo "✓ tmp/·.env·.venv 제외 확인"
 fi
 
+# CI의 secret-scan job과 같은 도구를 같은 기본 규칙으로 돌린다.
+# 예외는 줄 단위 `gitleaks:allow` 주석과 `.gitleaksignore`(지문)로만 둔다 — 전용 설정 파일은 쓰지 않는다.
 if command -v gitleaks >/dev/null 2>&1; then
   echo ""
   echo "── gitleaks ─────────────────────────────────────────"
-  gitleaks detect --no-banner --redact -c .gitleaks.toml || FAIL=1
+  gitleaks git --no-banner --redact . && echo "✓ gitleaks" || FAIL=1
+else
+  echo ""
+  echo "⚠ gitleaks 없음 — CI에서만 검사된다 (winget install Gitleaks.Gitleaks)"
 fi
 
 echo ""
