@@ -320,34 +320,61 @@ docker inspect <HK_COUCHDB_CONTAINER> \
 
 ```sh
 # 이하 <ADMIN>:<ADMINPW>는 CouchDB 서버 관리자 계정. 셸 히스토리에 남지 않게 주의
-# ① hk_hub 사용자 생성
-curl -X PUT http://<ADMIN>:<ADMINPW>@<COUCHDB_HOST>:5984/_users/org.couchdb.user:hk_hub \
+# ⚠️ 자격증명을 URL에 넣지 않는다 — 비밀번호에 @ : / # 같은 문자가 있으면 URL 파싱이 깨져
+#    "Name or password is incorrect"가 뜬다(실제로 발생). curl이 직접 묻게 하거나 ~/.netrc를 쓴다
+CDB=http://<COUCHDB_HOST>:5984
+printf 'CouchDB admin 비밀번호: '; stty -echo; read ADMINPW; stty echo; echo
+
+# ⓪ _users 시스템 DB — 없으면 계정 생성이 not_found로 실패한다.
+#    설정 파일의 [admins]만으로 운영해 온 인스턴스에는 없을 수 있다
+curl -s -u "admin:$ADMINPW" -X PUT $CDB/_users; echo
+curl -s -u "admin:$ADMINPW" -X PUT $CDB/_replicator; echo
+
+# ① hk_hub 사용자 생성 — ⛔ 비밀번호가 비어 있으면 CouchDB가 "빈 비밀번호 계정"을 그대로 만든다.
+#    안내 문구가 아니라 실제로 중단시켜야 한다
+HKPW=$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9')
+[ ${#HKPW} -ge 20 ] || { echo "비밀번호 생성 실패 — 중단"; exit 1; }
+
+curl -s -u "admin:$ADMINPW" -X PUT $CDB/_users/org.couchdb.user:hk_hub \
   -H 'Content-Type: application/json' \
-  -d '{"name":"hk_hub","password":"<HK_HUB_PW>","roles":[],"type":"user"}'
+  -d "{\"name\":\"hk_hub\",\"password\":\"$HKPW\",\"roles\":[],\"type\":\"user\"}"; echo
+
+# 값을 화면에 띄우지 않고 .env에 바로 기록한다 (터미널 기록에 남기지 않기 위해)
+sudo sed -i "s|^HK_COUCHDB_PASSWORD=.*|HK_COUCHDB_PASSWORD=\"$HKPW\"|" <DEPLOY_DIR>/.env
+unset HKPW
 
 # ② DB 3개 생성
 for db in hyeseongkit_sessions hyeseongkit_auth hyeseongkit_vault; do
-  curl -X PUT http://<ADMIN>:<ADMINPW>@<COUCHDB_HOST>:5984/$db
+  curl -s -u "admin:$ADMINPW" -X PUT $CDB/$db; echo
 done
 
-# ③ 각 DB의 관리자로 hk_hub 등록 (인덱스=설계문서 생성에 필요 — members 권한으로는 불가)
+# ③ _security — hk_hub를 admins와 members **둘 다**에 넣는다
+#    ⛔ members를 비우면 그 DB는 공개다. admins는 "누가 관리자인가"만 정하고
+#       "누가 접근할 수 있는가"는 members가 정한다 (실제로 인증 없이 200이 나왔다)
 for db in hyeseongkit_sessions hyeseongkit_auth hyeseongkit_vault; do
-  curl -X PUT http://<ADMIN>:<ADMINPW>@<COUCHDB_HOST>:5984/$db/_security \
+  curl -s -u "admin:$ADMINPW" -X PUT $CDB/$db/_security \
     -H 'Content-Type: application/json' \
-    -d '{"admins":{"names":["hk_hub"],"roles":[]},"members":{"names":[],"roles":[]}}'
+    -d '{"admins":{"names":["hk_hub"],"roles":[]},"members":{"names":["hk_hub"],"roles":[]}}'; echo
 done
 ```
 
-**확인:**
+**확인 — 세 가지 모두 통과해야 한다:**
 
 ```sh
-curl -s http://hk_hub:<HK_HUB_PW>@<COUCHDB_HOST>:5984/hyeseongkit_sessions | head -c 200
-# {"db_name":"hyeseongkit_sessions", ...} 가 나오면 성공
-curl -s http://hk_hub:<HK_HUB_PW>@<COUCHDB_HOST>:5984/_all_dbs
-# obsidian_vault 가 보이더라도 접근은 막혀 있어야 정상 (권한 부여 안 함 — D4 (C))
+# ① 인증 없이 접근 → 401 (200이면 아직 공개 상태다)
+for db in hyeseongkit_sessions hyeseongkit_auth hyeseongkit_vault; do
+  printf '%-24s ' $db; curl -s -o /dev/null -w '%{http_code}\n' $CDB/$db
+done
+
+# ② 빈 비밀번호로 접근 → 401 (200이면 빈 비밀번호 계정이 만들어진 것이다)
+curl -s -u "hk_hub:" -o /dev/null -w '빈 비밀번호: %{http_code}\n' $CDB/hyeseongkit_sessions
+
+# ③ 실제 DB 목록 확인 — 위키 볼트 DB의 정확한 이름을 여기서 파악한다
+curl -s -u "admin:$ADMINPW" $CDB/_all_dbs; echo
+# 그 이름으로 인증 없이 접근했을 때도 401이어야 한다
 ```
 
-> ⚠️ 기존 위키 볼트 DB(`obsidian_vault`)에는 **어떤 권한도 주지 않는다.** 허브가 그 DB를 건드릴 경로 자체를 만들지 않는 것이 D4 (C)의 물리적 보장이다.
+> ⚠️ 기존 위키 볼트 DB에는 **어떤 권한도 주지 않는다.** 허브가 그 DB를 건드릴 경로 자체를 만들지 않는 것이 D4 (C)의 물리적 보장이다. 이름은 환경마다 다르므로 위 `_all_dbs`로 확인한다.
 
 ---
 
@@ -528,7 +555,8 @@ cd <프로젝트> && hk init
 [ ] §4   <JENKINS_HOME_DIR>를 Hyper Backup 대상에 추가
 [ ] §5   CPU 기준선 재기록 (Jenkins 있고 허브 없는 상태)
 [ ] §6-0 전용 네트워크 생성 + CouchDB 추가 연결 (LiveSync 정상 확인)
-[ ] §6-1 hk_hub 계정 + DB 3개 + _security.admins
+[ ] §6-1 _users 생성 → hk_hub 계정(빈 비밀번호 아님 확인) → DB 3개 → _security(admins+members)
+[ ] §6-1 검증: 무인증 401(T19) · 빈 비밀번호 401(T20) · _all_dbs로 위키 볼트 이름 확인
 [ ] §7   deploy/ 복사 + chmod +x + chown 1000
 [ ] §7-1 HK_ENCRYPTION_KEY 생성 + 별도 보관                        ← 분실 시 복구 불가
 [ ] §7-2 .env 작성 + chmod 600

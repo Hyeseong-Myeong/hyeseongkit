@@ -123,7 +123,9 @@ HTTP API · MCP 도구 · CouchDB 스키마 · 인증 흐름 · 마스킹 규칙
 ### 0-5. v1.7 스펙 델타 (초기 구현에서 확정·수정된 것)
 
 v1.6 기준으로 무엇이 달라졌는지의 대조표다. **상세는 각 반영 위치를 본다** — 이 표는 추적용이며 사양의 원본이 아니다.
-22건 중 **4·5·6·17·18·20·22번은 구현·배포 중 발견한 결함**이고(20·22는 실제로 CI와 컨테이너 기동을 막았다), 나머지는 사용자 결정 반영이거나 스펙 공백 보완이다.
+25건 중 **4·5·6·17·18·20·22·23·24번은 구현·배포 중 발견한 결함**이다. 그중 20·22는 실제로 CI와 컨테이너 기동을 막았고, **23·24는 데이터를 노출시킨 채 배포될 뻔했다.** 나머지는 사용자 결정 반영이거나 스펙 공백 보완이다.
+
+> **이 결함들의 공통점:** 전부 *"문서에 적힌 대로 하면 될 것"* 이라고 가정한 자리에서 나왔다 — 실측 없이 쓴 문장(§1 네트워크), 권한 모델을 확인하지 않은 예시(`_security`), 검증 없이 진행되는 스크립트(빈 비밀번호). **배포 절차의 각 단계에 "무엇이 통과의 증거인가"를 붙이는 것**이 이번 개정의 일관된 주제다.
 
 | # | 델타 | 반영 위치 | 근거 |
 |---|---|---|---|
@@ -149,6 +151,9 @@ v1.6 기준으로 무엇이 달라졌는지의 대조표다. **상세는 각 반
 | 20 | **push 전 검사 `scripts/preflight.sh` + `.gitleaksignore`** 신설, T13을 그 실행으로 재정의 | §14-2, §13 | 사용자 지시 2026-08-12: *"항상 푸시 전에는 … 검사하고 진행하도록 기록"*. 마스킹 테스트 벡터가 gitleaks에 걸려 **실제로 CI가 실패**했다 — 줄 단위 `gitleaks:allow` 주석과 지문 등록으로 해소 |
 | 21 | **배포 트리거(Jenkins)의 이미지·compose를 저장소에서 분리.** 요구사항만 §14-4-1에 규정 | §14-2, §14-4-1 | 사용자 지적 2026-08-12: *"젠킨스 이미지가 현재 레포에 귀속될 이유가 있는지"*. 기술적 필요가 없었고, **D25에서 애플리케이션을 인프라 저장소에서 분리한 논리와 어긋났다** |
 | 22 | **`cpus:` → `cpu_shares:`** (L4의 수단 변경) | §12-1, 기획서 §4-1-2 L4·R17 | **배포를 막는 결함.** Synology 커널에 CFS 쿼터가 없어 `cpus:`를 쓰면 **컨테이너 생성이 거부된다**(`NanoCPUs can not be set…`, 2026-08-12 실측). 하드 상한은 이 하드웨어에서 불가능하므로 상대 가중치로 대체하고, **L7 관측이 사실상 유일한 방어선**이 되었다 |
+| 23 | **`_security`의 `members`에 `hk_hub` 추가** | §12-3, 런북 §6-1 | ⛔ **데이터 노출 결함.** CouchDB는 `members`가 비면 그 DB를 **공개**로 취급한다 — `admins`만으로는 막지 못한다. 초안대로 설정한 세 DB가 인증 없이 `200`을 반환하는 것이 확인됐다(2026-08-13). `hyeseongkit_auth`의 토큰 해시와 `hyeseongkit_vault`의 평문 마크다운이 사설망 안에서 그대로 읽혔을 것이다 |
+| 24 | **`_users` 선행 생성**과 **빈 비밀번호 차단**을 절차에 명시 | §12-3, 런북 §6-1 | 설정 파일의 `[admins]`만으로 운영해 온 인스턴스에는 `_users`가 없어 계정 생성이 `not_found`로 실패한다. 더 나쁘게는, **비밀번호 변수가 비어도 CouchDB가 "빈 비밀번호 계정"을 그대로 만든다** — 실제로 만들어졌다. 안내 문구가 아니라 스크립트가 중단해야 한다 |
+| 25 | 위키 볼트 DB 이름을 **`<WIKI_VAULT_DB>` 플레이스홀더**로 | 전 문서 | 문서가 `obsidian_vault`라고 단정했으나 실제 이름이 달랐다(`_all_dbs`로 확인). 환경마다 다른 값이므로 D28 규약대로 플레이스홀더가 맞다 |
 
 > **P4로 이연:** livesync-bridge 관련 산출물(`bridge/`, compose 서비스, CI 빌드 스텝)은 **작성하지 않고 주석 자리 표시만 둔다** — `config.json` 실제 필드명이 미실측(U2)이고 S2 검증 전에는 가동할 수 없어, 지금 만들면 검증 불가 상태의 이미지를 계속 빌드하게 된다 (사용자 결정 2026-08-12). 사양 자체(§8-3)는 그대로 유효하다.
 
@@ -166,7 +171,7 @@ NAS (Synology DS220+, 24/7)
       ├ hyeseongkit_sessions  ★SSOT
       ├ hyeseongkit_auth
       ├ hyeseongkit_vault     ← 브리지만 쓴다
-      └ obsidian_vault        ← 접근 금지 (D4 (C))
+      └ <WIKI_VAULT_DB>       ← 접근 금지 (D4 (C))
 
 클라이언트 (데스크톱/맥북): hk CLI + MCP ── Tailscale HTTP ──▶ 허브 :9100
 휴대폰: Obsidian(세션 볼트 열람) / Claude 앱(수동 붙여넣기)
@@ -194,7 +199,9 @@ docker network connect <HK_DOCKER_NET> <HK_COUCHDB_CONTAINER>   # 라이브 작�
 - 허브 compose는 이 네트워크를 `external: true`로 참조한다 → **`docker compose down`이 네트워크를 지우지 않으므로** hyeseongkit을 철거해도 CouchDB의 연결은 남는다 (§12-1)
 - 네트워크 생성 후 서브넷이 LAN·Tailscale 대역과 겹치지 않는지 확인한다: `docker network inspect <HK_DOCKER_NET> --format '{{json .IPAM.Config}}'`
 
-**약점과 자가 복구:** CouchDB 컨테이너를 **재생성**하면(이미지 업그레이드 등) 이 연결이 풀린다. 재시작(`docker restart`)으로는 풀리지 않는다. `deploy.sh`가 배포할 때마다 `docker network connect`를 idempotent하게 다시 실행해 스스로 복구한다 — CouchDB가 `docker run`으로 생성되어(2026-08-12 확인) compose 정의에 네트워크를 심을 수 없기 때문이다.
+**약점과 자가 복구:** `docker network connect`로 붙인 연결은 CouchDB 컨테이너를 **재생성**하면 풀린다(재시작으로는 풀리지 않는다). `deploy.sh`가 배포할 때마다 idempotent하게 다시 연결해 스스로 복구한다.
+
+> **(2026-08-13 갱신)** 실제로는 이 약점을 더 근본적으로 없앴다 — CouchDB를 `docker run`에서 **compose로 이전**하면서 네트워크를 그 정의에 넣었기 때문에, 재생성해도 연결이 유지된다. 따라서 `deploy.sh`의 재연결은 이제 **필수가 아니라 보험**이다(CouchDB가 compose 밖에서 다시 만들어지는 경우 대비). 이전 과정에서 두 가지를 함께 처리했다: 포트를 사설망 주소로 제한, 그리고 **설정 디렉터리(`local.d`)를 호스트로 externalize** — `[couchdb] uuid`와 `[chttpd_auth] secret`이 컨테이너 안에만 있어서, 그대로 재생성했으면 **uuid가 바뀌어 LiveSync가 전체 재동기화**를 했을 것이다.
 
 **기각한 대안 — 호스트 게이트웨이 경유** (`extra_hosts: host.docker.internal:host-gateway` + `http://host.docker.internal:5984`): CouchDB를 전혀 건드리지 않는 장점이 있으나, **허브가 "5984를 호스트에 계속 공개해 둔다"는 결정에 결합된다.** 기획서는 CouchDB를 사설망 안으로 더 잠그는 방향(C5)을 열어 두고 있는데, 이 방식을 쓰면 그 선택이 곧 허브 장애가 된다. **미래의 보안 강화를 지금 인질로 잡지 않기 위해** 채택하지 않았다. 컨테이너 IP 직접 지정은 재시작 시 IP가 바뀌므로 검토 대상이 아니다.
 
@@ -787,7 +794,7 @@ tags: []
 
 ### 8-3. livesync-bridge 구성
 
-- 대상: **`hyeseongkit_vault` 전용.** `obsidian_vault` 접속 정보는 브리지 설정에 넣지 않는다 (D4 (C)의 물리적 보장)
+- 대상: **`hyeseongkit_vault` 전용.** `<WIKI_VAULT_DB>` 접속 정보는 브리지 설정에 넣지 않는다 (D4 (C)의 물리적 보장)
 - 볼트 루트 = `/vault-out` — 파일 피어와 CouchDB 피어의 양방향 동기화이나 운용상 **허브→볼트 단방향**(볼트 쪽 수정은 다음 렌더가 덮어씀)
 
 `bridge/dat/config.json` 템플릿:
@@ -816,7 +823,7 @@ tags: []
 
 | # | 시점 | 절차 |
 |---|---|---|
-| S1 | 브리지 설치 전 | ① 위키 볼트 파일 백업(`<VAULT_PATH>` 전체 복사) ② CouchDB 백업 — `obsidian_vault`를 NAS 내 `backup_obsidian_vault_<날짜>`로 서버측 복제(`POST /_replicate`). 같은 서버에 브리지를 들이므로 위키 DB도 백업한다 |
+| S1 | 브리지 설치 전 | ① 위키 볼트 파일 백업(`<VAULT_PATH>` 전체 복사) ② CouchDB 백업 — `<WIKI_VAULT_DB>`를 NAS 내 `backup_<WIKI_VAULT_DB>_<날짜>`로 서버측 복제(`POST /_replicate`). 같은 서버에 브리지를 들이므로 위키 DB도 백업한다 |
 | S2 | 최초 구동 | `hyeseongkit_vault_test` DB로 브리지를 먼저 연결 → 파일 생성/수정/삭제 왕복 + **LiveSync tweak 협상 반응** 확인 → 통과 후 실제 `hyeseongkit_vault`로 전환 |
 | S4 | 상시 | Obsidian LiveSync 플러그인 업그레이드 **전에** livesync-bridge 호환성(릴리스 노트) 확인. 불일치 의심 시 브리지 중지 — 뷰만 멈추고 SSOT는 무관 |
 
@@ -1228,32 +1235,49 @@ P0: ① Jenkins 재설치 (배포 트리거 — 런북 §2~§4)
        (기존 기준선은 구 Jenkins가 돌던 상태의 값이다. 허브 추가분만 보려면
         "Jenkins 있고 허브 없는" 상태가 비교 대상이어야 한다)
 
-P1: ③ 네트워크 준비 (§1-1) — docker network create → CouchDB를 추가 연결
-       (CouchDB 재시작 없음. 서브넷이 LAN·Tailscale과 겹치지 않는지 확인)
+P1: ③ 네트워크 준비 (§1-1) — 허브와 CouchDB가 같은 사용자 정의 네트워크에 있게 한다
     → ④ CouchDB 준비 (관리자 계정으로 — F4·§2-1)
-       a. hk_hub 계정 생성
-       b. hyeseongkit_sessions / _auth / _vault  3개 DB 생성      ← 허브는 못 만든다
-       c. 각 DB의 _security.admins 에 hk_hub 등록                 ← 인덱스 생성에 필요
-          (members가 아니라 admins. 서버 관리자와는 다른, DB 한정 권한이다)
+       a. **`_users` 시스템 DB 존재 확인**, 없으면 생성         ← 없으면 b가 조용히 실패한다
+       b. hk_hub 계정 생성 — **비밀번호가 비어 있지 않은지 먼저 검증**
+       c. hyeseongkit_sessions / _auth / _vault  3개 DB 생성      ← 허브는 못 만든다
+       d. 각 DB의 _security에 hk_hub를 **admins와 members 둘 다** 등록
+          (admins만으로는 DB가 공개된 채로 남는다 — 아래 경고)
     → ⑤ .env 작성(사용자) — HK_ENCRYPTION_KEY 생성 포함 (§12-2)
     → ⑥ Jenkins hk-deploy 실행 → 허브 컨테이너 기동
     → ⑦ 인덱스 자동 생성 확인 (허브 로그) → ⑧ (NAS) docker exec로 기기 토큰 발급 (§5-2)
     → ⑨ curl로 push/resume 왕복(T2) → ⑩ NAS 재부팅 후 자동 기동 확인(T9)
     → ⑪ 1주 CPU 관측(L7) — ②의 기준선과 비교
 
-P4 추가(F4): LiveSync 기기용 `vault_client` 계정 생성 — `hyeseongkit_vault`(+원하면 `obsidian_vault`)만
+P4 추가(F4): LiveSync 기기용 `vault_client` 계정 생성 — `hyeseongkit_vault`(+원하면 `<WIKI_VAULT_DB>`)만
     접근 가능. 세션 볼트 등록(§8-4)은 admin이 아니라 이 계정으로 한다
 P4: ① S1 백업 → ② S2 테스트 DB 검증 → ③ 실 DB 전환 → ④ 기기 볼트 등록(§8-4)
     → ⑤ 휴대폰에서 세션 확인 → ⑥ 1주 CPU 관측(L7)
 ```
 
-`_security` 설정 예 (3개 DB 각각, 관리자 계정으로):
+`_security` 설정 (3개 DB 각각, 관리자 계정으로):
 
 ```jsonc
 // PUT /{db}/_security
 { "admins":  { "names": ["hk_hub"], "roles": [] },   // 설계 문서(인덱스) 생성 권한
-  "members": { "names": [], "roles": [] } }
+  "members": { "names": ["hk_hub"], "roles": [] } }  // ★ 비워두면 DB가 공개된다
 ```
+
+> ⛔ **`members`를 비우면 그 DB는 공개다 (v1.7 실측, 2026-08-12).** CouchDB에서 `admins`는 *"누가 관리자인가"* 만 정하고, *"누가 접근할 수 있는가"* 는 `members`가 정한다. **members가 비어 있으면 아무나 읽고 쓸 수 있다** — `require_valid_user`가 꺼져 있으면 인증조차 필요 없다.
+> 초안은 `members: []`였고, 실제로 세 DB가 인증 없이 `200`을 반환하는 것이 확인됐다. `hyeseongkit_auth`에는 토큰 해시가, `hyeseongkit_vault`에는 렌더된 **평문 마크다운**이 들어가므로 그대로 뒀으면 사설망 안에서 전부 읽혔을 것이다.
+>
+> **검증 방법:** 자격증명 없이 `GET /{db}` → **401이어야 한다.** 200이면 아직 공개 상태다.
+
+**시스템 DB와 계정 생성 (④ a·b의 함정)**
+
+**a. `_users` 시스템 DB** — 없으면 계정을 만들 수 없다(`404 not_found`). CouchDB 3.x는 클러스터 설정 단계에서 이것을 만드는데, **설정 파일의 `[admins]`만으로 운영해 온 인스턴스에는 없다**(2026-08-13 실측). 관리자 자격으로 `PUT /_users`, `PUT /_replicator`를 선행한다.
+
+> 이 실패가 특히 위험한 이유: 계정 생성만 실패하고 **그 뒤의 DB 생성·`_security` 설정은 성공**한다. `_security`에 적힌 `hk_hub`는 존재하지 않는 계정을 가리키게 되어, 반쪽 상태로 다음 단계까지 지나간다.
+
+**b. 빈 비밀번호 차단** — ⛔ **비밀번호 변수가 비어도 CouchDB는 "빈 비밀번호 계정"을 그대로 만든다.** 실제로 만들어졌고 빈 비밀번호로 세 DB에 접근이 됐다. 안내 메시지가 아니라 **스크립트가 중단**해야 한다: `[ ${#HKPW} -ge 20 ] || exit 1`.
+
+**c. 자격증명을 URL에 넣지 않는다** — 비밀번호에 `@ : / #`가 있으면 `http://user:pass@host` 형태에서 URL 파싱이 깨져 `Name or password is incorrect`가 뜬다(실제 발생). `.netrc`를 쓰거나 도구가 직접 묻게 한다.
+
+**검증 (T19·T20):** 자격증명 없이 `GET /{db}` → `401`, 빈 비밀번호로 `GET /{db}` → `401`.
 
 ---
 
@@ -1267,7 +1291,7 @@ SSOT의 유일본이 NAS CouchDB이므로 백업은 필수다. 볼트 뷰는 최
 | **2차 (논리)** | `hyeseongkit_*` 3개 DB를 `GET /{db}/_all_docs?include_docs=true`로 JSON 덤프 (작음). 복원은 `POST /{db}/_bulk_docs`. 덤프 스크립트 `hk-dump.sh`는 hub 이미지에 동봉, DSM 작업 스케줄러로 실행 | 주 1회 |
 | **복원 검증** | 빈 DB에 논리 덤프 복원 → `hk resume` 정상 확인 | 분기 1회 |
 
-- 1차 백업 대상 폴더에 `obsidian_vault` 데이터도 포함되므로 **S1(위키 볼트 백업)의 상시화**를 겸한다 → 설정 완료로 **S1의 CouchDB 측 전제가 이미 충족**됐다. P4 착수 시 볼트 **파일** 백업(`<VAULT_PATH>`)만 추가 확인하면 된다
+- 1차 백업 대상 폴더에 `<WIKI_VAULT_DB>` 데이터도 포함되므로 **S1(위키 볼트 백업)의 상시화**를 겸한다 → 설정 완료로 **S1의 CouchDB 측 전제가 이미 충족**됐다. P4 착수 시 볼트 **파일** 백업(`<VAULT_PATH>`)만 추가 확인하면 된다
 - 서버측 복제(`POST /_replicate`)로 같은 NAS 안에 사본을 두는 방식은 **디스크 장애를 못 막으므로** 1차 백업의 대체가 아니다 (보조로는 가능)
 
 **DB 밖에서 백업해야 하는 것 (v1.7)**
@@ -1300,6 +1324,8 @@ SSOT의 유일본이 NAS CouchDB이므로 백업은 필수다. 볼트 뷰는 최
 | **T14** | Jenkins 컨테이너에서 `docker compose ps` 실행 | 호스트의 hyeseongkit 컨테이너가 보인다 — DooD 3전제(§14-4-1) 성립 확인. **배포 시도 전에 이것부터** |
 | **T15** | 잘못된 `HK_ENCRYPTION_KEY`로 허브 기동 | **기동 실패** (평문으로 흘러가지 않는다 — D29 fail-closed) |
 | **T16** | `hk_hub` 권한 없이 허브 기동 (`_security` 미설정) | 기동 실패 + *무엇을 해야 하는지* 적힌 로그 (§2-1) |
+| **T19** | 자격증명 없이 `GET /hyeseongkit_{sessions,auth,vault}` | **401.** 200이면 `members`가 비어 DB가 공개된 상태다 (§12-3) |
+| **T20** | `curl -u "hk_hub:"` (빈 비밀번호)로 접근 | **401.** 200이면 빈 비밀번호 계정이 만들어진 것이다 (§12-3) |
 | **T17** | **사설망 밖(LAN)에서 Jenkins 포트 접속** | **연결 거부.** `docker.sock` 위험의 실질적 방어선이 서 있는지 확인 (§14-4-2 L-1) |
 | **T18** | CouchDB 컨테이너 재생성 → Jenkins에서 재배포 | `deploy.sh`가 네트워크를 다시 붙여 healthz 통과 (§1-1 자가 복구) |
 
