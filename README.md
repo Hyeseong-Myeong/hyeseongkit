@@ -27,6 +27,50 @@
 - 저장 전 **시크릿 마스킹은 fail-closed** — 실패하면 전송하지 않는다
 - 세션 본문은 **저장 시 암호화**된다. 열람용 마크다운은 허브가 복호화해 내보내므로 Obsidian에서는 평소대로 읽힌다
 
+## 데이터 흐름
+
+**쓰기는 즉시 전송된다.** 모아 뒀다 보내지 않는다 — `hk push` 한 번이 HTTP 요청 한 번이다.
+
+```
+hk push  ·  hk_push (MCP)  ·  /hk:push
+   │
+   ├─ ① 본문 확보 → ② 마스킹 (클라이언트, fail-closed)
+   │                       ↓ 실패하면 여기서 멈춘다. 전송도 적재도 없다
+   └─ ③ POST (Tailscale, 평문 — 사설망 전제)
+              │
+              ▼  허브
+         ④ 본문 암호화 → CouchDB hyeseongkit_sessions
+              │            evt:<thread>:<ts>:<device>:<type>  (append-only)
+              │            본문은 enc 필드. thread·ts·device·type은 인덱싱용 평문
+              ├─ ⑤ view:<thread> 재생성 (조회용 파생 문서, 역시 암호화)
+              └─ ⑥ 마크다운 렌더 → /vault-out → livesync-bridge → 볼트
+```
+
+**읽기는 허브가 조립해 돌려준다.**
+
+```
+SessionStart 훅 → hk resume → GET /v1/session/resume
+   → 허브가 복호화 → 토큰 예산(기본 2000) 안에서 packet 조립 → 대화에 주입
+```
+
+### 오프라인 큐 — 배치가 아니라 실패 보관함
+
+허브에 **닿지 못한 쓰기**만 로컬에 남겨 두는 장치다. 정상 상황에서는 파일이 생기지 않는다.
+
+| | |
+|---|---|
+| 대상 | 쓰기만 — `push` · `decide` · `close` · `checkpoint` |
+| 적재 조건 | 연결 오류 · 타임아웃 · 5xx |
+| **적재 안 함** | **4xx** — 재시도해도 실패한다. 넣으면 큐가 영영 막힌다 |
+| 조회 | `resume` · `status` · `search`는 대상 아님 (재시도가 무의미) |
+| 위치 | `~/.hyeseongkit/queue/<UTC-ts>-<4hex>.json` — **마스킹을 마친** 요청 바디 |
+| 비우기 | 다음 `hk` 명령 시작 시, 또는 MCP 브리지의 쓰기·`hk_status` |
+| 3회 실패 | `queue/failed/`로 이동 |
+
+훅(`--hook`)은 예산이 3초라 flush를 건너뛰고 자기 요청만 넣고 끝낸다. 큐 파일은
+**마스킹은 됐지만 암호화되지 않은** 평문 JSON이다 — 저장 시 암호화는 허브 쪽 장치이고,
+로컬 큐는 그 대상이 아니다.
+
 ## 문서
 
 | 문서 | 내용 |
