@@ -1,6 +1,6 @@
 """패킷 예산 계층 (설계서 §3-6, §3-7) — L0는 절대 잘리지 않는다."""
 
-from hyeseongkit.hub.packet import OMITTED_NOTE, build_packet, build_prompt
+from hyeseongkit.hub.packet import CARRY_NOTE, OMITTED_NOTE, build_packet, build_prompt
 
 VIEW = {
     "thread": "T-20260811-test",
@@ -66,6 +66,18 @@ def test_events_block_not_budgeted():
     packet = build_packet(VIEW, project_name="proj", budget=200, events_raw=events)
     assert "## 이벤트 원문" in packet
     assert "evt:T-x:1:d:push" in packet
+
+
+def test_carryover_capped_by_budget():
+    """이월은 L0지만 무한 증가하므로 예산의 1/4까지만 싣는다 — 전량은 볼트 파일에."""
+    view = dict(VIEW, know_carryover=[f"- 이월 항목 {i} 상세한 한국어 본문" for i in range(200)])
+    packet = build_packet(view, project_name="proj", budget=2000)
+    assert "- 이월 항목 0 상세한 한국어 본문" in packet  # 최신은 남는다
+    assert "- 이월 항목 199 상세한 한국어 본문" not in packet
+    assert CARRY_NOTE in packet
+    full = build_packet(view, project_name="proj", budget=0)
+    assert "- 이월 항목 199 상세한 한국어 본문" in full  # budget 0이면 전량
+    assert CARRY_NOTE not in full
 
 
 def test_prompt_wraps_packet():
