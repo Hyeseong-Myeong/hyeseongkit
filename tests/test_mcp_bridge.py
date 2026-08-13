@@ -210,3 +210,33 @@ def test_decide_without_thread_when_hub_down_reports_recovery(monkeypatch, in_pr
     payload = _payload(_call(mcp, "hk_decide", {"decision_text": "d"}))
     assert "thread" in payload["detail"]
     assert offline_queue.pending() == []
+
+
+def test_bridge_and_hub_expose_the_same_tool_surface(fake_couch):
+    """ "하나의 코어, 세 개의 표면" 원칙을 코드로 강제한다.
+
+    허브 build_mcp만 테스트되던 탓에 브리지 스키마 결함이 잡히지 않았다.
+    한쪽 표면에만 인자를 더하는 드리프트도 여기서 걸린다.
+    """
+    from cryptography.fernet import Fernet
+
+    from hyeseongkit.hub.auth import AuthService
+    from hyeseongkit.hub.crypto import BodyCrypto
+    from hyeseongkit.hub.mcp_server import build_mcp
+    from hyeseongkit.hub.service import SessionService
+    from hyeseongkit.hub.store import EventStore
+
+    crypto = BodyCrypto(Fernet.generate_key().decode())
+    store = EventStore(fake_couch, crypto, "hyeseongkit_sessions")
+    service = SessionService(store, fake_couch, "hyeseongkit_sessions")
+    hub = build_mcp(service, AuthService(fake_couch, "admin-token"))
+
+    def params(tool):
+        # 허브 도구의 ctx는 접속 헤더 해석용이라 도구 인자가 아니다.
+        # FastMCP가 Context 인자를 이미 스키마에서 빼지만, 그 동작에 기대지 않는다
+        return set(tool.input_schema.get("properties", {})) - {"ctx"}
+
+    hub_surface = {t.name: params(t) for t in asyncio.run(hub.list_tools())}
+    _mcp, bridge_tools = _tools()
+    bridge_surface = {n: params(t) for n, t in bridge_tools.items()}
+    assert hub_surface == bridge_surface
