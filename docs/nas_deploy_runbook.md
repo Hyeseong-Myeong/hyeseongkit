@@ -376,6 +376,37 @@ curl -s -u "admin:$ADMINPW" $CDB/_all_dbs; echo
 
 > ⚠️ 기존 위키 볼트 DB에는 **어떤 권한도 주지 않는다.** 허브가 그 DB를 건드릴 경로 자체를 만들지 않는 것이 D4 (C)의 물리적 보장이다. 이름은 환경마다 다르므로 위 `_all_dbs`로 확인한다.
 
+### 6-2. 설정 디렉터리(`local.d`) 쓰기 권한 확인
+
+CouchDB 설정 디렉터리는 호스트로 externalize돼 있다 (설계서 §1, 2026-08-13 갱신). 목적은 **컨테이너를 재생성해도 `[couchdb] uuid`와 `[chttpd_auth] secret`이 유지되게 하는 것**이다. 두 값이 바뀌면 LiveSync가 전체 재동기화를 하고 발급된 세션이 모두 무효가 된다.
+
+그런데 **소유권이 맞지 않아 CouchDB가 그 디렉터리에 쓰지 못하면 externalize를 한 의미가 없다** — 파일이 갱신되지 않으므로 값이 보존되지 않는다. 컨테이너 안에서 확인한다. 호스트 경로를 몰라도 되고, 값을 화면에 띄우지도 않는다.
+
+```sh
+# ① 쓰기 가능한가
+docker exec <HK_COUCHDB_CONTAINER> sh -c \
+  'touch /opt/couchdb/etc/local.d/.wtest 2>/dev/null && rm /opt/couchdb/etc/local.d/.wtest && echo "쓰기 가능" || echo "쓰기 불가"'
+
+# ② uuid·secret이 파일에 남아 있는가 — 키 이름만 출력한다 (값은 노출하지 않는다)
+docker exec <HK_COUCHDB_CONTAINER> sh -c \
+  'grep -h -o -e "^uuid" -e "^secret" /opt/couchdb/etc/local.d/*.ini /opt/couchdb/etc/local.ini 2>/dev/null | sort -u'
+```
+
+**확인:** ①이 `쓰기 가능`이고 ②에 `uuid`와 `secret`이 **둘 다** 나온다. (2026-08-13 실측: 통과)
+
+①이 `쓰기 불가`일 때만 소유권을 맞춘다. **`<...>`를 그대로 실행하지 않는다** — 플레이스홀더째 실행해 실패한 전례가 있다. 아래 두 명령의 출력을 복사해 치환한다.
+
+```sh
+docker exec <HK_COUCHDB_CONTAINER> id        # chown에 넣을 uid:gid
+docker inspect <HK_COUCHDB_CONTAINER> \
+  --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{"\n"}}{{end}}'   # local.d의 호스트 경로
+
+sudo ls -la <위에서 확인한 호스트 경로>       # ⛔ 되돌릴 수 있도록 현재 소유권을 먼저 기록한다
+sudo chown -R <uid>:<gid> <호스트 경로>
+```
+
+바꾼 뒤 ①을 다시 실행해 `쓰기 가능`으로 바뀌는지 확인한다. 재시작은 필요 없다 — §8-4 재부팅 검증에서 함께 확인된다.
+
 ---
 
 ## 7. 허브 배포 디렉터리와 `.env`
@@ -532,10 +563,37 @@ curl -s -H "Authorization: Bearer <기기토큰>" \
 
 암호화 확인 (D29):
 
+**"평문이 없는지"가 아니라 "`enc` 필드가 있고 본문 필드가 없는지"를 본다.** D29는 본문만 암호화하고 **메타데이터는 평문으로 남긴다** — `thread`·`ts`·`device`·`status`·`project_id`·`sensitivity`는 인덱싱에 필요하다 (설계서 §0-2-2). 따라서 "문서에 평문이 하나도 없어야 한다"는 기준은 애초에 틀렸다.
+
+허브 컨테이너 안에서 실행한다. 자격증명이 이미 환경변수에 있으므로 **비밀번호를 타이핑하지 않고**, 셸 히스토리·URL에도 남지 않는다.
+
 ```sh
-curl -s http://hk_hub:<HK_HUB_PW>@<COUCHDB_HOST>:5984/hyeseongkit_sessions/_all_docs?include_docs=true \
-  | grep -c "port 9100"        # 0 이어야 한다 (본문이 평문으로 저장되지 않음)
+docker exec -i hyeseongkit-hub python - <<'PY'
+import base64, json, os, urllib.request
+u, p = os.environ["HK_COUCHDB_USER"], os.environ["HK_COUCHDB_PASSWORD"]
+url = os.environ["HK_COUCHDB_URL"] + "/hyeseongkit_sessions/_all_docs?include_docs=true"
+req = urllib.request.Request(url)
+req.add_header("Authorization", "Basic " + base64.b64encode(f"{u}:{p}".encode()).decode())
+rows = json.load(urllib.request.urlopen(req))["rows"]
+docs = [r["doc"] for r in rows if not r["id"].startswith("_design")]
+print(f"세션 문서 {len(docs)}개 (전체 {len(rows)}개 중 설계문서 {len(rows)-len(docs)}개 제외)\n")
+SUSPECT = {"title", "sections", "body", "content", "text", "summary", "packet", "decisions"}
+for d in docs[:3]:
+    keys = sorted(k for k in d if not k.startswith("_"))
+    print(d["_id"])
+    print("  필드:", keys)
+    print("  enc 존재:", "enc" in d, "| 평문 본문 의심:", sorted(SUSPECT & set(keys)) or "없음")
+    print()
+PY
 ```
+
+**확인:** `enc 존재: True`이고 `평문 본문 의심: 없음`. (2026-08-13 실측: 통과)
+
+> ⚠️ **`-i`를 빠뜨리지 않는다.** 없으면 stdin이 붙지 않아 python이 빈 입력을 읽고 **아무 출력 없이 정상 종료**한다 — 실패가 "결과 없음"처럼 보인다.
+>
+> ⚠️ **설계문서를 걸러내야 한다.** `_all_docs`를 그대로 앞에서부터 자르면 §8-1 기동 시 만들어진 `_design/...` 인덱스만 잡히고 세션 문서는 한 건도 안 나온다. 그 상태로는 판정이 되지 않는다.
+>
+> 이전 판의 `curl ... | grep -c "port 9100"`은 두 가지 이유로 폐기했다. ① **`0`이 "암호화됨"과 "아무것도 저장 안 됨" 양쪽에서 나와** 거짓 통과가 가능하다 ② 비밀번호를 URL에 넣어 §6-1의 경고(자격증명을 URL에 넣지 않는다)와 모순된다.
 
 ### 8-4. 재부팅 생존 (T9)
 
@@ -612,6 +670,7 @@ cd <프로젝트> && hk init
 [ ] §6-0 전용 네트워크 생성 + CouchDB 추가 연결 (LiveSync 정상 확인)
 [ ] §6-1 _users 생성 → hk_hub 계정(빈 비밀번호 아님 확인) → DB 3개 → _security(admins+members)
 [ ] §6-1 검증: 무인증 401(T19) · 빈 비밀번호 401(T20) · _all_dbs로 위키 볼트 이름 확인
+[ ] §6-2 local.d 쓰기 가능 + uuid·secret 보존 확인                  ← 재생성 시 전체 재동기화 방지
 [ ] §7   deploy/ 복사 + chmod +x + chown 1000
 [ ] §7-1 HK_ENCRYPTION_KEY 생성 + 별도 보관                        ← 분실 시 복구 불가
 [ ] §7-2 .env 작성 + chmod 600
