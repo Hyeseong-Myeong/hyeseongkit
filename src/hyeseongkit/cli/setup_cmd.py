@@ -1,8 +1,8 @@
-"""`hk setup` — 기기(사용자) 단위 Claude Code 어댑터 설치 (설계서 §9, F2).
+"""`hk setup` — 기기(사용자) 단위 어댑터 설치 (설계서 §9, F2).
 
-산출물은 전부 비커밋·사용자 스코프:
+산출물은 전부 비커밋·사용자 스코프 — 저장소 안에는 아무것도 쓰지 않는다 (D32):
 [1] ~/.claude/commands/hk/*.md  [2] ~/.claude/settings.json 훅 병합 (§10-4)
-[3] user 스코프 stdio MCP 등록  [4] 검증
+[3] user 스코프 stdio MCP 등록  [4] Codex/Antigravity 사용자 AGENTS.md (§9-4)  [5] 검증
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from importlib import resources
 from pathlib import Path
 
 from ..core.config import GLOBAL_DIR
-from ..core.util import iso_to_compact, iso_utc
+from .marker import backup_file, merge_marker_block
 
 COMMANDS = ("push", "resume", "status", "decide", "search", "close")
 
@@ -73,9 +73,7 @@ def merge_hooks() -> str:
     if json.dumps(data, ensure_ascii=False, sort_keys=True) == original:
         return "변경 없음"
     if settings_path.is_file():
-        backup = GLOBAL_DIR / "backup" / iso_to_compact(iso_utc())
-        backup.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(settings_path, backup / "settings.json")
+        backup_file(GLOBAL_DIR / "backup", settings_path)
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     settings_path.write_text(
         json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n"
@@ -123,6 +121,42 @@ def register_mcp() -> str:
     return "등록 완료"
 
 
+def agents_targets() -> list[tuple[str, Path, Path]]:
+    """(툴, 존재해야 하는 루트, 사용자 단위 지침 파일) — R14 실측 2026-08-13.
+
+    - Codex: codex-home의 전역 AGENTS.md (`codex-home/src/instructions/mod.rs`,
+      "Failed to read global AGENTS.md instructions from"). `AGENTS.local.md`는 모른다
+    - Antigravity: Global Customizations Root의 AGENTS.md
+      ("append to AGENTS.md in the Global Customizations Root"). 같은 디렉터리에
+      `hooks.json`·`mcp_config.json`이 있다
+    """
+    home = Path.home()
+    return [
+        ("Codex", home / ".codex", home / ".codex" / "AGENTS.md"),
+        ("Antigravity", home / ".gemini" / "config", home / ".gemini" / "config" / "AGENTS.md"),
+    ]
+
+
+def install_agents_blocks() -> list[str]:
+    """[4] Codex/Antigravity 사용자 단위 AGENTS.md에 마커 블록 병합 (§9-4, D32).
+
+    저장소 안의 `AGENTS.md`·`.agents/AGENTS.md`는 커밋 대상일 수 있으므로 건드리지
+    않는다. 사용자 단위 파일은 모든 프로젝트에서 읽히므로, 블록 본문이
+    `.hyeseongkit/project.toml`이 있을 때만 적용된다고 스스로 한정한다.
+    """
+    block = _template_text("agents_block.md")
+    out = []
+    for tool, root, path in agents_targets():
+        if not root.is_dir():
+            out.append(f"{tool} 미설치 — 건너뜀")
+            continue
+        result = merge_marker_block(
+            path, block, dry_run=False, backup_root=GLOBAL_DIR / "backup", create=True
+        )
+        out.append(f"{tool} {path.name} — {result}")
+    return out
+
+
 def verify() -> str:
     """[4] claude mcp list에 hyeseongkit 표시 확인."""
     if not _claude_cli():
@@ -152,5 +186,6 @@ def cmd_setup(args, _settings, _project, _client) -> int:
     print("[1] 슬래시 커맨드: " + (f"{len(changed)}개 갱신 {changed}" if changed else "변경 없음"))
     print(f"[2] 훅: {merge_hooks()}")
     print(f"[3] MCP: {register_mcp()}")
-    print(f"[4] 검증: {verify()}")
+    print("[4] 사용자 AGENTS.md: " + " / ".join(install_agents_blocks()))
+    print(f"[5] 검증: {verify()}")
     return 0

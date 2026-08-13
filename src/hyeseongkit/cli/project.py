@@ -1,14 +1,12 @@
 """`hk init` / `hk link` — 프로젝트 등록·수동 연결 (설계서 §7, §10).
 
 - 산출물은 전부 gitignore (D20). project.toml이 유일한 프로젝트 단위 산출물 (F2)
-- 기존 파일은 마커 블록 안에만 삽입/갱신, 수정 전 백업 (R10)
+- **커밋 대상 파일은 수정하지 않는다** (D32) — AGENTS.md 지침은 기기 단위 `hk setup` 소관
 - 오분기 방지 가드: 같은 name의 기존 프로젝트가 있으면 생성을 멈추고 hk link 안내 (§7)
 """
 
 from __future__ import annotations
 
-import difflib
-import shutil
 from importlib import resources
 from pathlib import Path
 
@@ -21,13 +19,11 @@ from ..core.config import (
     write_project_toml,
 )
 from ..core.transport import HubClient, HubError, HubUnreachable
-from ..core.util import ascii_slug, iso_to_compact, iso_utc
+from ..core.util import ascii_slug
 from . import io
+from .marker import backup_file
 
 GITIGNORE_BLOCK = "# hyeseongkit (커밋하지 않음 — D20/F2)\n.hyeseongkit/\nHYESEONGKIT.md\n"
-
-MARKER_START = "<!-- hyeseongkit:start"
-MARKER_END = "<!-- hyeseongkit:end -->"
 
 
 def _template(name: str) -> str:
@@ -36,36 +32,7 @@ def _template(name: str) -> str:
 
 def _backup(root: Path, target: Path) -> None:
     """수정 전 원본을 .hyeseongkit/backup/<ts>/에 복사 (§10-1)."""
-    ts = iso_to_compact(iso_utc())
-    dst = root / PROJECT_DIR_NAME / "backup" / ts / target.name
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(target, dst)
-
-
-def _merge_marker_block(path: Path, block: str, *, dry_run: bool, root: Path) -> str:
-    """마커 쌍이 있으면 내부만 교체, 없으면 파일 끝에 추가 (§10-5). 결과 설명 반환."""
-    text = path.read_text(encoding="utf-8")
-    if MARKER_START in text and MARKER_END in text:
-        start = text.index(MARKER_START)
-        end = text.index(MARKER_END) + len(MARKER_END)
-        new_text = text[:start] + block.strip() + text[end:]
-        action = "마커 블록 갱신"
-    else:
-        sep = "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
-        new_text = text + sep + block.strip() + "\n"
-        action = "마커 블록 추가"
-    if new_text == text:
-        return "변경 없음"
-    diff = "\n".join(
-        difflib.unified_diff(
-            text.splitlines(), new_text.splitlines(), fromfile=str(path), tofile=str(path), n=1
-        )
-    )
-    print(f"[{path.name}] {action} 예정:\n{diff}")
-    if not dry_run:
-        _backup(root, path)
-        path.write_text(new_text, encoding="utf-8", newline="\n")
-    return action
+    backup_file(root / PROJECT_DIR_NAME / "backup", target)
 
 
 def _merge_gitignore(root: Path, *, dry_run: bool) -> str:
@@ -182,11 +149,12 @@ def cmd_init(
         print("[3] HYESEONGKIT.md — 생성/갱신")
     else:
         print("[3] HYESEONGKIT.md — 변경 없음")
-    block = _template("agents_block.md")
+    # AGENTS.md는 커밋 대상일 수 있다 — 팀 저장소의 공용 에이전트 규칙에 개인 도구 지침을
+    # 섞지 않는다 (D32). 지침 블록은 기기 단위 사용자 스코프 파일에만 넣는다 (§9-4)
     for rel in ("AGENTS.md", ".agents/AGENTS.md"):
-        p = root / rel
-        if p.is_file():
-            print(f"[3] {rel} — {_merge_marker_block(p, block, dry_run=dry, root=root)}")
+        if (root / rel).is_file():
+            print(f"[3] {rel} — 건드리지 않음 (D32). 지침은 `hk setup`이 사용자 스코프에 설치")
+            break
     hk_cmds = Path.home() / ".claude" / "commands" / "hk"
     if not hk_cmds.is_dir():
         print("[3] Claude Code 어댑터는 기기 단위입니다 — `hk setup`을 실행하세요 (§9)")
