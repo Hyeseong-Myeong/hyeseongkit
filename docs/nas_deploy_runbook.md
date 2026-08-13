@@ -406,6 +406,7 @@ docker run --rm python:3.11-slim sh -c \
 | 키 | 값 |
 |---|---|
 | `GHCR_OWNER` | ghcr 네임스페이스 (소문자) |
+| `GHCR_TOKEN` | **패키지가 비공개일 때만 필요.** `read:packages` 스코프 PAT — 공개 패키지면 비워 둔다 (§7-3) |
 | `IMAGE_TAG` | `latest` (Jenkins 파라미터가 덮어쓴다) |
 | `HK_DOCKER_NET` | §6-0에서 만든 전용 네트워크명 |
 | `HK_COUCHDB_CONTAINER` | CouchDB 컨테이너 이름 — `deploy.sh`가 네트워크 재연결(자가 복구)에 쓴다 |
@@ -421,6 +422,44 @@ chmod 600 <DEPLOY_DIR>/.env
 **확인:** `docker network ls`에 `HK_DOCKER_NET`의 이름이 실제로 있다.
 
 > ⚠️ `.env`는 `deploy.sh`가 **셸로 읽는다**(`. ./.env`). 값에 공백이 있으면 반드시 따옴표로 감싼다.
+
+### 7-3. 컨테이너 패키지를 비공개로 전환 (선택)
+
+GHCR 패키지는 **저장소와 별개의 공개 범위**를 갖는다. 저장소가 공개여도 패키지는 비공개로 둘 수 있다.
+
+이미지 자체에 새로 새는 비밀은 없다 — `hub/Dockerfile`은 `pyproject.toml`·`README.md`·`src`만 COPY하고, `.dockerignore`가 `.env`·`deploy`·`docs`·`tests`·`.hyeseongkit/`을 뺀다. 다만 비공개로 두면 **해결된 의존성 버전**(`pyproject.toml`의 범위가 아니라 실제 설치된 값)이 드러나지 않아, 어떤 CVE가 적용되는지 알아내는 비용이 올라간다.
+
+> ⚠️ **순서를 지킨다 — 토큰을 먼저 넣고 나중에 전환한다.** 반대로 하면 다음 배포가 인증 실패로 깨진다.
+
+1. PAT을 발급한다 — **`read:packages`만**. NAS는 pull만 하므로 write 권한을 주지 않는다
+2. `<DEPLOY_DIR>/.env`에 추가한다. 셸로 읽히므로 따옴표로 감싼다
+   ```sh
+   GHCR_TOKEN="<PAT>"
+   ```
+3. **자격증명이 실제로 되는지 먼저 확인한다.** 아직 공개 상태에서는 `docker compose pull`이 토큰과 무관하게 성공하므로 검증이 되지 않는다 — 로그인을 직접 시험한다
+
+   > `.env`는 §7-2에서 `chmod 600`으로 잠갔다. 소유자가 `root`면 일반 계정으로는 읽을 수 없으므로(`-sh: ./.env: Permission denied`) **`sudo`로 실행한다.** 서브셸 안에서 소싱하므로 토큰이 대화형 셸의 환경변수로 남지도 않는다.
+
+   ```sh
+   cd <DEPLOY_DIR>
+   sudo grep -o '^[A-Z_]*' .env   # 값은 출력하지 않고 키 이름만 — OWNER/TOKEN 둘 다 있는지
+   sudo sh -c '. ./.env && echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_OWNER" --password-stdin'
+   # Login Succeeded 가 나와야 한다
+   ```
+
+   `Must provide --username with --password-stdin`이 나오면 **`$GHCR_OWNER`가 비어 있다는 뜻**이다 — `.env`를 소싱하지 않았거나 그 키가 없다.
+
+4. GitHub 패키지 페이지 → **Package settings → Danger Zone → Change visibility → Private**
+5. 전환이 실제로 됐는지 확인한다. 3단계를 `sudo`로 했다면 자격증명이 **root의** `~/.docker/config.json`에 있으므로 여기서도 `sudo`로 맞춘다
+   ```sh
+   sudo docker logout ghcr.io
+   sudo docker compose pull        # 실패해야 정상 — 비공개가 맞다는 뜻
+   sudo ./deploy.sh <현재태그>      # 성공해야 정상 — deploy.sh가 로그인한다 (deploy.sh 30~33행)
+   ```
+
+- **CI는 영향받지 않는다.** `publish` job은 `GITHUB_TOKEN`의 `packages: write`로 자기 네임스페이스에 올리므로 비공개여도 그대로 동작한다
+- **PAT 만료에 주의한다.** 만료되면 배포가 인증 실패로 조용히 깨진다. 만료일을 길게 잡거나 갱신 시점을 기록해 둔다
+- `GHCR_TOKEN`은 자격증명이므로 `.env`와 함께 **데이터 백업 세트에 넣지 않는다** (설계서 §12-4)
 
 ---
 
