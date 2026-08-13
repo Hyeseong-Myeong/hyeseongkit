@@ -6,13 +6,14 @@ Claude Code가 프로젝트 cwd에서 기동하므로 project.toml로 프로젝�
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 
 from mcp.server import MCPServer
 
 from ..core import redact
-from ..core.config import current_project, load_client_settings
+from ..core.config import ClientSettings, current_project, load_client_settings
 from ..core.mcp_desc import (
     CLOSE_DESCRIPTION,
     DECIDE_DESCRIPTION,
@@ -24,9 +25,11 @@ from ..core.mcp_desc import (
 from ..core.transport import HubClient, HubError, HubUnreachable
 
 
-def serve() -> int:
-    settings = load_client_settings()
-    tool_name = os.environ.get("HK_TOOL") or "claude-code"  # §9 — 기본 등록 대상이 Claude Code
+def build_bridge_mcp(settings: ClientSettings, tool_name: str) -> MCPServer:
+    """도구를 등록한 서버 객체만 돌려준다 — 실행은 serve()가 한다.
+
+    허브 build_mcp와 같은 구조. 도구 스키마를 테스트에서 검사할 수 있게 하려는 분리다.
+    """
 
     def _client() -> HubClient:
         if not settings.hub_url or not settings.api_token:
@@ -44,18 +47,29 @@ def serve() -> int:
         return project.extra_rules if project else []
 
     def _guard(fn):
+        # 반환형이 그대로 출력 스키마가 되므로 에러도 같은 형으로 돌려준다.
+        # `-> str`은 문자열, `-> dict`은 {"error": ...} — 허브 mcp_server._err와 같은 규약.
+        # (future annotations 탓에 애너테이션은 문자열로 들어온다)
+        returns_str = fn.__annotations__.get("return") in ("str", str)
+
+        def _fail(message: str, detail=None):
+            if returns_str:
+                return message + (f" — {json.dumps(detail, ensure_ascii=False)}" if detail else "")
+            return {"error": message, "detail": detail}
+
+        # wraps 없이 감싸면 @mcp.tool이 wrapped의 (*a, **kw)를 도구 스키마로 노출한다.
+        # __wrapped__가 있어야 inspect.signature가 원본 시그니처를 따라간다.
+        @functools.wraps(fn)
         def wrapped(*a, **kw):
             try:
                 return fn(*a, **kw)
             except redact.RedactionError as exc:
-                return {"error": f"마스킹 실패(fail-closed): {exc}"}
+                return _fail(f"마스킹 실패(fail-closed): {exc}")
             except HubError as exc:
-                return {"error": f"{exc.status} {exc.code}: {exc.message}", "detail": exc.detail}
+                return _fail(f"{exc.status} {exc.code}: {exc.message}", exc.detail)
             except (HubUnreachable, RuntimeError) as exc:
-                return {"error": str(exc)}
+                return _fail(str(exc))
 
-        wrapped.__name__ = fn.__name__
-        wrapped.__doc__ = fn.__doc__
         return wrapped
 
     mcp = MCPServer("hyeseongkit")
@@ -188,5 +202,11 @@ def serve() -> int:
             resp = c.request("POST", "/v1/session/close", json=body)
         return {"status": resp["status"], "thread": resp["thread"]}
 
-    mcp.run(transport="stdio")
+    return mcp
+
+
+def serve() -> int:
+    settings = load_client_settings()
+    tool_name = os.environ.get("HK_TOOL") or "claude-code"  # §9 — 기본 등록 대상이 Claude Code
+    build_bridge_mcp(settings, tool_name).run(transport="stdio")
     return 0
