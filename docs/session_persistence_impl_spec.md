@@ -2,7 +2,7 @@
 
 > 상위 문서(기획서): [`session_persistence_design.md`](session_persistence_design.md) — 결정의 배경·대안 비교는 전부 그쪽 참조
 > 운영 절차서: [`nas_deploy_runbook.md`](nas_deploy_runbook.md) — NAS Jenkins 설치·배포 실행 순서 (이 문서는 "무엇을", 런북은 "어떤 순서로")
-> 기준일: 2026-08-12 · 버전: v1.7
+> 기준일: 2026-08-13 · 버전: v1.8
 > **완료 기준: 구현자가 이 문서만 보고 만들 수 있는가** (기획서 P-0)
 
 ## 개정 이력
@@ -17,6 +17,7 @@
 | v1.5 | **C1 보강 — `hk link` 수동 매칭 신설** (사용자 제안 채택): 개명·오분기 시 기존 프로젝트에 수동 연결 + `hk init` 오분기 방지 가드. `hk init --rename`은 `hk link`로 통합 (§7, §3-2, §11-2) | 2026-08-11 사용자 회신: *"수동으로 기존 세션과 매칭할 수 있는 기능"* |
 | v1.6 | **D26 재결정 → (D) 러너 없음·NAS 수동 배포** (§14-1-1 (D), §14-3~14-6 재작성, deploy job 제거) / **D28 플레이스홀더 규약 신설**(§0-3-1) 및 문서 전반 고유값 치환 / `.env.example` 재편(§12-2) / 외부 기여 정책(§14-8) / 수용 기준 T11~T13 갱신 | 2026-08-11 사용자 회신: self-hosted 러너 미사용 + 민감정보 `.env` 이전 |
 | **v1.7** | **초기 구현(P1~P3) 반영 — 스펙 델타 16건(§0-5).** ① `slug` 필드 + 409 `THREAD_EXISTS`(D30) ② D29 암호화에 `title` 포함·`enc` 블록 확정 ③ evt `ord` 필드 ④ 쓰기 후 **뷰 즉시 fold**(렌더는 계속 비동기) ⑤ 마스킹 `re.ASCII` ⑥ §6-5 벡터 표기 정정 ⑦ `GET /v1/projects` 목록·`name` 검색 ⑧ `mask_report` 전달 ⑨ `hk init --force-new` ⑩ 훅 모드 큐 flush 생략 ⑪ MCP SDK 2.0 ⑫ 허브 MCP도 치환 마스킹 ⑬ `~/.hyeseongkit/config.toml` 전문 ⑭ `HK_DEVICE_ID`/`HK_TOOL` 키 ⑮ bridge P4 이연 ⑯ 저장 인터페이스 확장 **⑰ DB·인덱스 생성 권한** **⑱ 허브↔CouchDB 전용 네트워크**(⑰·⑱은 배포를 막던 결함) **⑲ `docker.sock` 위협·완화 명문화** **⑳ push 전 검사 스크립트·gitleaks 예외** **㉑ 배포 트리거 구현을 저장소에서 분리**. **§14-4~14-6을 NAS Jenkins 수동 트리거로 재작성**(D26 갱신), 런북 분리 | 2026-08-12 구현 세션 + 사용자 회신 (스레드 ID·title 암호화·bridge 이연·Jenkins 3항·네트워크 방식·docker.sock 정리 지시) |
+| **v1.8** | **D32 신설 — `hk init`은 커밋 대상 지침 파일을 수정하지 않는다.** `AGENTS.md`·`.agents/AGENTS.md` 마커 삽입을 제거하고, 지침 블록을 기기 단위 `hk setup`이 **사용자 단위 `AGENTS.md`**에 설치하도록 이전(**§9-4 신설**, §9 표·§9-1·§10-1·§10-5 갱신). **U3/R14 실측 완료** — Codex `~/.codex/AGENTS.md`·`~/.codex/config.toml`, Antigravity `~/.gemini/config/AGENTS.md`·`mcp_config.json`. 마커 병합·백업을 `cli/marker.py`로 분리해 `hk init`/`hk setup` 공용화 | 2026-08-13 사용자 지적: *"`.agents`는 팀의 전역 에이전트 내용이 들어가야 할 텐데, 개인 작업을 위한 프롬프트가 들어가면 오히려 취지에 맞지 않는다"* |
 
 ## 0. 범위와 전제
 
@@ -831,7 +832,7 @@ tags: []
 
 ---
 
-## 9. Claude Code 연동 — 기기(사용자) 단위 `hk setup`
+## 9. 툴 연동 — 기기(사용자) 단위 `hk setup`
 
 > **F2 확정 (2026-08-11):** 산출물은 **전부 비커밋**이며, Claude Code 어댑터는 프로젝트가 아니라 **기기(사용자) 단위**로 관리한다.
 > 근거(사용자 통찰): 에이전트 지침·스킬은 프로젝트의 자산이 아니라 **개인 작업 방식의 자산**이다 — 버전 관리 주체는 git이 아니라 개인 영속화 시스템(hyeseongkit 자신)이어야 한다.
@@ -842,6 +843,7 @@ tags: []
 | 슬래시 커맨드 | `~/.claude/commands/hk/*.md` | **모든 프로젝트에서 `/hk:*` 동작** |
 | 훅 | `~/.claude/settings.json` 병합 | 모든 프로젝트에서 자동 resume/checkpoint |
 | MCP | `claude mcp add --scope user hyeseongkit -- hk mcp serve` (**stdio**) | 모든 프로젝트에서 `hk_*` 도구 사용 가능 |
+| 지침 (Codex·Antigravity) | 각 툴의 **사용자 단위 `AGENTS.md`** 마커 블록 (§9-4) | 모든 프로젝트에서 읽힘 — 블록이 스스로 적용 범위를 한정 |
 | 프로젝트 식별 | `.hyeseongkit/project.toml` — 유일한 프로젝트 단위 산출물 (`hk init`, gitignore) | — |
 
 - stdio 브리지(`hk mcp serve`)는 Claude Code가 **프로젝트 cwd에서 기동**하므로 `project.toml`을 읽어 프로젝트 컨텍스트를 얻는다 → 프로젝트별 `.mcp.json`·`X-HK-Project` 헤더·`${VAR}` 확장 이슈(구 U4)가 전부 소멸
@@ -856,7 +858,8 @@ hk setup [--refresh]
   [1] ~/.claude/commands/hk/{push,resume,status,decide,search,close}.md 설치 (§9-3 전문)
   [2] ~/.claude/settings.json에 훅 병합 (§9-2 — 병합 알고리즘은 §10-4)
   [3] claude mcp add --scope user hyeseongkit -- hk mcp serve   (이미 등록돼 있으면 스킵)
-  [4] 검증: claude mcp list 에 hyeseongkit 표시 확인
+  [4] Codex/Antigravity 사용자 단위 AGENTS.md에 마커 블록 병합 (§9-4 — 툴 루트가 없으면 건너뜀)
+  [5] 검증: claude mcp list 에 hyeseongkit 표시 확인
   --refresh: 패키지 내장 템플릿과 설치본의 버전 해시 비교 후 갱신 (pipx upgrade 후 실행)
 ```
 
@@ -949,6 +952,24 @@ description: hyeseongkit 세션 종료
 2. 그다음 `hk_close`를 호출하라 (thread: 현재 스레드, outcome: 완료면 done, 중단이면 dropped — "$ARGUMENTS"에서 판단)
 ```
 
+### 9-4. Codex·Antigravity 사용자 단위 `AGENTS.md` (D32 — R14/U3 실측 2026-08-13)
+
+**저장소 안 `AGENTS.md`·`.agents/AGENTS.md`는 읽지도 쓰지도 않는다.** 팀 저장소에서 그 파일은 **공용** 에이전트 규칙이고 커밋 대상이다 — 개인 도구 지침을 섞으면 파일의 취지에 어긋난다(D32). `hk init`은 해당 파일을 발견하면 "건드리지 않음"만 출력한다.
+
+대신 각 툴의 **사용자 단위 지침 파일**에 마커 블록(§10-5)을 병합한다:
+
+| 툴 | 경로 | 실측 근거 (설치본 바이너리 문자열) |
+|---|---|---|
+| Codex | `~/.codex/AGENTS.md` | `codex-home/src/instructions/mod.rs` · `Failed to read global AGENTS.md instructions from` — 우선순위는 `AGENTS.override.md` → `AGENTS.md` |
+| Antigravity | `~/.gemini/config/AGENTS.md` | `Global Rules: … append to "AGENTS.md" in the Global Customizations Root` · `customizations.agentsCustomization.globalDir` — 같은 디렉터리에 `hooks.json`·`mcp_config.json`이 실재한다 |
+
+- **`AGENTS.local.md`는 쓰지 않는다.** 두 툴 바이너리 어디에도 그 이름이 없다 — gitignore 대상 로컬 파일을 만들어 봐야 읽히지 않는다
+- 툴 루트(`~/.codex`, `~/.gemini/config`)가 없으면 **파일을 만들지 않고 건너뛴다**
+- 사용자 단위 파일은 모든 프로젝트에서 읽히므로, 블록 본문이 **`.hyeseongkit/project.toml`이 있을 때만 적용**이라고 스스로 한정한다 (§10-5)
+- 수정 전 원본은 `~/.hyeseongkit/backup/<ts>/`에 복사한다 (R10). 마커 병합이라 재실행은 idempotent
+- 이미 저장소 `AGENTS.md`에 블록이 들어간 클론이 있다면 **수동으로 제거**한다 — 자동 마이그레이션은 넣지 않았다
+- MCP 등록 자동화는 아직 하지 않는다 (P5). 실측된 경로만 기록: Codex `~/.codex/config.toml`의 `[mcp_servers.<name>]`(`codex mcp` 서브커맨드), Antigravity `~/.gemini/config/mcp_config.json`
+
 ---
 
 ## 10. `hk init` 산출물
@@ -972,8 +993,9 @@ hk init [--name <slug>] [--dry-run] [--force-new]   # 개명 후 재연결은 hk
 |---|---|
 | 항상 | `.hyeseongkit/project.toml`, `.gitignore` 항목, `HYESEONGKIT.md` |
 | Claude Code | **프로젝트 산출물 없음 — 기기 단위 `hk setup`으로 이전 (§9).** `hk setup` 미실행이 감지되면 안내만 출력 |
-| `AGENTS.md` 존재 | 마커 블록 삽입(§10-5) ※ 이 파일이 커밋 대상이면 마커도 커밋된다 — **R14 실측 때 Codex/Antigravity의 사용자 단위 지침 경로를 확인해 가능하면 그쪽으로 이전** |
-| `.agents/AGENTS.md` 존재 (Antigravity) | 동일 마커 블록 + MCP 설정은 안내만 (R14 실측 전) |
+| `AGENTS.md` / `.agents/AGENTS.md` 존재 | **프로젝트 산출물 없음 — 커밋 대상일 수 있어 건드리지 않는다 (D32).** "건드리지 않음"만 출력하고, 지침 블록은 기기 단위 `hk setup`이 사용자 단위 파일에 설치한다 (§9-4) |
+
+> **v1.8 변경 (2026-08-13):** 이전 판은 두 파일에 마커 블록을 삽입하면서 "이 파일이 커밋 대상이면 마커도 커밋된다 — R14 실측 때 사용자 단위 경로로 이전"이라는 단서를 달아 두었다. R14/U3 실측이 끝나 그 이전을 완료했다 (§9-4).
 
 ### 10-2. `.hyeseongkit/project.toml` 전문
 
@@ -1005,22 +1027,27 @@ HYESEONGKIT.md
 ### 10-4. 설정 JSON 병합 알고리즘 (`~/.claude/settings.json` — `hk setup`이 사용)
 JSON은 마커 주석이 불가하므로 **키 단위 병합**: ① 파일 없으면 생성 ② `hooks.<이벤트>` 배열에서 `command`가 `hk `로 시작하는 항목만 hyeseongkit 소유로 간주하고 교체 ③ 그 외 기존 항목은 절대 건드리지 않음 ④ 결과가 기존과 같으면 무변경 (idempotent)
 
-### 10-5. `AGENTS.md` / `.agents/AGENTS.md` 마커 블록 전문
+### 10-5. `AGENTS.md` 마커 블록 전문 (설치 주체는 `hk setup` — §9-4)
+
+대상은 **사용자 단위** `AGENTS.md`다. 저장소 안 파일에는 넣지 않는다 (D32).
 
 ```markdown
-<!-- hyeseongkit:start (managed by `hk init` — 이 블록 안은 수동 편집 금지) -->
+<!-- hyeseongkit:start (managed by `hk setup` — 이 블록 안은 수동 편집 금지) -->
 ## hyeseongkit 세션 연속성
 
-이 프로젝트는 hyeseongkit으로 세션을 툴 간 인계한다.
+**적용 조건:** 프로젝트 루트에 `.hyeseongkit/project.toml`이 있을 때만 따른다.
+없으면 이 절 전체를 무시한다 (이 파일은 기기 전역이라 모든 프로젝트에서 읽힌다).
+
+hyeseongkit은 여러 AI 툴을 오가며 하나의 작업을 이어가기 위한 세션 허브다.
 
 - 작업 시작 시: MCP 도구 `hk_resume`(last:true)으로 이전 상태를 불러와 "할 일"부터 확인
 - 중요한 결정이 확정되면: `hk_decide`로 결정·근거·기각안을 **원문 그대로** 기록
 - 작업을 마치거나 오래 자리를 뜨기 전: `hk_push`로 상태 저장
   (결정·지시·오류·식별자·수치·할 일·질문은 요약 금지 — 원문 보존)
-- MCP를 쓸 수 없는 환경이면 `HYESEONGKIT.md`의 수동 절차를 따른다
+- MCP를 쓸 수 없는 환경이면 프로젝트 루트 `HYESEONGKIT.md`의 수동 절차를 따른다
 <!-- hyeseongkit:end -->
 ```
-갱신 규칙: 마커 쌍이 있으면 내부만 교체, 없으면 파일 끝에 추가, 파일이 없으면 생성하지 않고 건너뜀.
+갱신 규칙: 마커 쌍이 있으면 내부만 교체, 없으면 파일 끝에 추가. 파일이 없을 때 — `hk setup`의 사용자 단위 대상은 **생성**하고(툴 루트가 있을 때만), 그 밖에는 건너뛴다.
 
 ### 10-6. `HYESEONGKIT.md` 전문 (MCP 없는 툴용 — 수동 경로)
 
@@ -1752,7 +1779,7 @@ Jenkins가 불통이면: NAS 셸에서 cd <DEPLOY_DIR> && ./deploy.sh sha-<이�
 |---|---|---|
 | ~~U1~~ ⚠️→✅ | **1차 해소가 부정확했다 (2026-08-12 정정).** v1.6은 "컨테이너 주소로 접근 중"이라 적었으나, 실측 결과 CouchDB는 **기본 `bridge` 네트워크**에만 있어 이름 해석이 불가능했다 — 그대로 배포했다면 허브가 CouchDB를 찾지 못했을 것이다. **사용자 정의 네트워크 신설 + CouchDB 추가 연결**로 해소 (§1-1). 교훈: *"기존 운용 방식 확인됨"은 실제 명령의 출력으로만 적는다* | — |
 | U2 | livesync-bridge `config.json` 실제 필드명 (§8-3은 추정 골격) | S2 검증 단계 |
-| U3 | Codex / Antigravity MCP 설정 경로 (R14). **Codex는 IDE 확장으로 사용 확인 (2026-08-11)** → IDE 확장의 MCP 설정 경로를 실측 | P5 전 실측 |
+| ~~U3~~ ✅ | Codex / Antigravity 지침·MCP 설정 경로 (R14) — **실측 완료 (2026-08-13, §9-4).** 지침: `~/.codex/AGENTS.md`, `~/.gemini/config/AGENTS.md` → `hk setup`이 설치(D32). MCP: `~/.codex/config.toml`의 `[mcp_servers.*]`, `~/.gemini/config/mcp_config.json` | 자동 등록만 P5 |
 | ~~U4~~ ✅ | **해소 (2026-08-11)** — F2로 user 스코프 **stdio MCP**(`hk mcp serve`)가 기본이 되어 `.mcp.json` `${VAR}` 헤더 이슈 자체가 소멸 | — |
 | ~~U5~~ ✅ | **해소 (2026-08-11)** — 기존 볼트 백업 수단 **없음** → S1 전체 절차 수행. 이후 **Hyper Backup 설정 완료**로 CouchDB 측 전제는 충족(§12-4), P4에서 볼트 **파일** 백업만 확인 | — |
 | ~~U6~~ ✅ | **해소 (2026-08-11)** — D26 = **(D) 러너 없음·NAS 수동 배포** 재확정 (§14-1-1). D25·D27 포함 CI/CD 결정 완결 | — |
