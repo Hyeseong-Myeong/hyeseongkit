@@ -30,6 +30,25 @@ def _print_hub_error(err: HubError) -> None:
         io.eprint(json.dumps(err.detail, ensure_ascii=False, indent=1))
 
 
+def _print_queue_notice() -> None:
+    """큐 적체·최종 실패를 세션 시작 지점에서 드러낸다.
+
+    훅은 실패해도 exit 0이고(R11) flush도 건너뛰므로(§11-3), resume 출력이
+    사용자가 적체를 알아챌 수 있는 유일한 자동 지점이다.
+    packet 블록은 허브가 닫아서 보내므로(§packet) 그 뒤에 붙여 블록을 건드리지 않는다.
+    """
+    pending = offline_queue.pending()
+    failed = offline_queue.failed()
+    if not pending and not failed:
+        return
+    parts = []
+    if pending:
+        parts.append(f"대기 {len(pending)}건")
+    if failed:
+        parts.append(f"최종 실패 {len(failed)}건")
+    print(f"\n> ⚠️ 오프라인 큐: {' · '.join(parts)} — `hk queue --list`로 확인")
+
+
 def _send_or_queue(client: HubClient | None, endpoint: str, body: dict) -> tuple[int, dict | None]:
     """(exit code, 응답). 불통 시 큐 적재 후 exit 0 (K4)."""
     if client is None:
@@ -130,6 +149,8 @@ def cmd_resume(
         _print_hub_error(err)
         return _exit_for(err)
     except HubUnreachable as exc:
+        # 불통일 때가 적체가 가장 중요한 순간이다 — 훅이라도 이 사실은 알린다
+        _print_queue_notice()
         if hook:
             io.eprint(f"hk resume 스킵(허브 불통): {exc}")
             return 0
@@ -141,6 +162,7 @@ def cmd_resume(
         print(json.dumps(resp.get("view"), ensure_ascii=False, indent=1))
     else:
         print(resp.get("content", ""))
+    _print_queue_notice()
     return 0
 
 
