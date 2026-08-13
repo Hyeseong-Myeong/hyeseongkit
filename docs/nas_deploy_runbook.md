@@ -437,17 +437,24 @@ GHCR 패키지는 **저장소와 별개의 공개 범위**를 갖는다. 저장�
    GHCR_TOKEN="<PAT>"
    ```
 3. **자격증명이 실제로 되는지 먼저 확인한다.** 아직 공개 상태에서는 `docker compose pull`이 토큰과 무관하게 성공하므로 검증이 되지 않는다 — 로그인을 직접 시험한다
+
+   > `.env`는 §7-2에서 `chmod 600`으로 잠갔다. 소유자가 `root`면 일반 계정으로는 읽을 수 없으므로(`-sh: ./.env: Permission denied`) **`sudo`로 실행한다.** 서브셸 안에서 소싱하므로 토큰이 대화형 셸의 환경변수로 남지도 않는다.
+
    ```sh
-   cd <DEPLOY_DIR> && . ./.env
-   echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_OWNER" --password-stdin
+   cd <DEPLOY_DIR>
+   sudo grep -o '^[A-Z_]*' .env   # 값은 출력하지 않고 키 이름만 — OWNER/TOKEN 둘 다 있는지
+   sudo sh -c '. ./.env && echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_OWNER" --password-stdin'
    # Login Succeeded 가 나와야 한다
    ```
+
+   `Must provide --username with --password-stdin`이 나오면 **`$GHCR_OWNER`가 비어 있다는 뜻**이다 — `.env`를 소싱하지 않았거나 그 키가 없다.
+
 4. GitHub 패키지 페이지 → **Package settings → Danger Zone → Change visibility → Private**
-5. 전환이 실제로 됐는지 확인한다
+5. 전환이 실제로 됐는지 확인한다. 3단계를 `sudo`로 했다면 자격증명이 **root의** `~/.docker/config.json`에 있으므로 여기서도 `sudo`로 맞춘다
    ```sh
-   docker logout ghcr.io
-   docker compose pull        # 실패해야 정상 — 비공개가 맞다는 뜻
-   ./deploy.sh <현재태그>      # 성공해야 정상 — deploy.sh가 로그인한다 (deploy.sh 30~33행)
+   sudo docker logout ghcr.io
+   sudo docker compose pull        # 실패해야 정상 — 비공개가 맞다는 뜻
+   sudo ./deploy.sh <현재태그>      # 성공해야 정상 — deploy.sh가 로그인한다 (deploy.sh 30~33행)
    ```
 
 - **CI는 영향받지 않는다.** `publish` job은 `GITHUB_TOKEN`의 `packages: write`로 자기 네임스페이스에 올리므로 비공개여도 그대로 동작한다
