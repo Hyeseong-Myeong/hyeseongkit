@@ -18,7 +18,8 @@ def cmd_queue(args, _settings, _project, client: HubClient | None) -> int:
         if client is None:
             io.eprint("허브 미설정 — flush 불가")
             return 2
-        ok, remain = offline_queue.flush(client)
+        # 사용자가 직접 지시한 재전송이므로 백오프 대기를 무시한다
+        ok, remain = offline_queue.flush(client, force=True)
         print(f"재전송 {ok}건 성공, {remain}건 대기")
         failed = offline_queue.failed()
         if failed:
@@ -29,7 +30,12 @@ def cmd_queue(args, _settings, _project, client: HubClient | None) -> int:
     for p in pending:
         try:
             item = json.loads(p.read_text(encoding="utf-8"))
-            print(f"- {p.name} → {item.get('endpoint')} (attempts {item.get('attempts', 0)})")
+            nxt = item.get("next_attempt")
+            when = f", 다음 시도 {nxt}" if nxt else ""
+            print(
+                f"- {p.name} → {item.get('endpoint')} "
+                f"(attempts {item.get('attempts', 0)}/{offline_queue.MAX_ATTEMPTS}{when})"
+            )
         except (OSError, ValueError):
             print(f"- {p.name} (읽기 실패)")
     failed = offline_queue.failed()
