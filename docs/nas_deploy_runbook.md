@@ -310,7 +310,9 @@ docker inspect <HK_COUCHDB_CONTAINER> \
   --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}'
 ```
 
-**확인:** 마지막 명령이 `bridge <HK_DOCKER_NET>` 두 개를 보여준다. LiveSync 클라이언트가 여전히 동기화되는지도 한 번 본다.
+**확인:** 마지막 명령이 `<HK_DOCKER_NET>`을 포함한다. LiveSync 클라이언트가 여전히 동기화되는지도 한 번 본다.
+
+> CouchDB를 `docker run`에서 **compose로 이전하면 네트워크가 그 정의에 들어가므로 `<HK_DOCKER_NET>` 하나만 나온다** — 정상이다. `bridge`와 둘 다 나오는 것은 이전 전, `docker network connect`로 붙였을 때의 모습이다. 어느 쪽이든 허브는 이 네트워크로 붙고(`hk_hub` 요청의 출발지가 이 대역), 외부 클라이언트는 게시된 포트로 붙는다.
 
 > **재생성하면 풀린다.** CouchDB 컨테이너를 재생성하면(이미지 업그레이드 등) 이 연결이 사라진다. 재시작만으로는 풀리지 않는다. `deploy.sh`가 배포할 때마다 다시 붙이므로(`HK_COUCHDB_CONTAINER` 필요) 대개는 저절로 복구되지만, 증상을 알아두면 좋다 — `hk doctor`와 `/healthz`가 `couchdb: down`을 보고한다.
 
@@ -597,14 +599,102 @@ PY
 
 ### 8-4. 재부팅 생존 (T9)
 
-DSM 재부팅 후:
+DSM 재부팅 후 **5분쯤 기다렸다가** 확인한다 — 부팅 작업이 발동하기까지 시간이 걸린다.
 
 ```sh
-docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'hyeseongkit|jenkins'
+docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'hyeseongkit|jenkins|couchdb'
 curl -s http://<HUB_HOST>:9100/healthz
+ip -4 -br addr show | grep -i tailscale
+sysctl net.ipv4.ip_nonlocal_bind
 ```
 
-**확인:** 허브·Jenkins 모두 `Up`, healthz의 `couchdb`가 `ok`.
+**확인:** 허브·Jenkins·CouchDB 모두 `Up`, healthz의 `couchdb`가 `ok`, `tailscale0`에 사설망 주소가 붙어 있고 `ip_nonlocal_bind = 1`.
+
+> ⛔ **아래 두 대책이 없으면 재부팅 때마다 컨테이너가 전부 죽는다.** 2026-08-14 첫 재부팅 검증에서 실제로 발생했고, 복구에 네 시간이 걸렸다.
+
+#### 실패 모드 — 부팅 순서 경합
+
+CouchDB와 Jenkins는 포트를 **사설망(Tailscale) 주소로 제한**해 게시한다. 부팅 시 Docker가 Tailscale보다 먼저 뜨면 그 주소가 아직 없다.
+
+```
+driver failed programming external connectivity on endpoint ...
+Error starting userland proxy: listen tcp4 <사설망주소>:5984: bind: cannot assign requested address
+```
+
+**재시작 정책은 이 경우 개입하지 않는다.** `always`·`unless-stopped`는 컨테이너가 **종료**될 때 작동하는데 이것은 **시작 자체의 실패**다. `docker inspect`의 `RestartCount`가 `0`으로 남는 것이 그 증거이며, 정책을 바꿔도 해결되지 않는다.
+
+허브는 그 여파로 재시작을 반복한다 — CouchDB 컨테이너가 없으니 이름 해석이 실패한다.
+
+```
+hyeseongkit.hub.couch.CouchDBDown: [Errno -2] Name or service not known
+```
+
+**진단 순서:** `docker inspect <컨테이너> --format '{{.State.Error}}'`를 먼저 본다. 종료 코드(`128`·`143`)는 직전 정상 종료의 흔적이라 오해를 부르고, 시작 실패의 진짜 이유는 `State.Error`에 있다.
+
+#### 대책 ① 컨테이너 — `ip_nonlocal_bind`
+
+아직 존재하지 않는 주소에도 bind를 허용한다. **커널 초기화 단계에서 적용되므로 Docker보다 항상 먼저**이고, 부팅 순서에 대한 의존이 사라진다. 주소가 나중에 붙으면 그때부터 트래픽이 흐른다.
+
+```sh
+sudo sysctl -w net.ipv4.ip_nonlocal_bind=1                              # 즉시
+sudo sh -c 'echo "net.ipv4.ip_nonlocal_bind = 1" >> /etc/sysctl.conf'   # 영구
+```
+
+- DSM에는 **`/etc/sysctl.d`가 없다.** `/etc/sysctl.conf`에 직접 쓴다
+- 이 파일은 부팅 시 정상 적용된다 (재부팅 후 `sysctl net.ipv4.ip_nonlocal_bind`가 `1`)
+- **DSM UI에는 커널 파라미터를 다루는 항목이 없다** — 파일 편집이 유일한 방법이다
+- 대규모 DSM 업데이트 후에는 값이 남아 있는지 확인한다
+
+#### 대책 ② Tailscale — 부팅 작업
+
+`tailscaled`는 패키지 자동시작으로 뜨지만, **`tailscale configure-host`의 효과는 재부팅을 넘기지 못한다.** tailscaled는 전용 계정으로 도는데 `/dev/net/tun`이 root 전용(`crw------- root root`)이라, 이 명령 없이는 TUN 장치를 열지 못해 `tailscale0`이 만들어지지 않는다. **데몬은 살아 있는데 인터페이스와 주소만 없는 상태**가 되므로, `tailscale status`가 피어 목록을 정상 출력하는 것에 속지 않는다.
+
+**제어판 → 작업 스케줄러 → 생성 → 트리거된 작업 → 사용자 정의 스크립트**
+사용자 `root` · 이벤트 **부팅됨** · **작업 활성화 체크**
+
+```sh
+PATH=/sbin:/usr/sbin:/bin:/usr/bin:/usr/syno/bin:$PATH
+exec >> <로그경로>/boot-tailscale.log 2>&1
+echo "=== $(date) boot task start ==="
+
+for i in $(seq 1 36); do [ -e /dev/net/tun ] && break; sleep 5; done
+echo "tun: $(ls -l /dev/net/tun 2>&1)"
+
+/var/packages/Tailscale/target/bin/tailscale configure-host
+echo "configure-host rc=$?"
+
+synosystemctl stop pkgctl-Tailscale.service; sleep 3
+synosystemctl start pkgctl-Tailscale.service
+echo "start rc=$?"
+
+for i in $(seq 1 36); do ip -4 addr show | grep -q '<사설망주소>' && break; sleep 5; done
+
+if ! ip -4 addr show | grep -q '<사설망주소>'; then
+  echo "1차 실패 — 재시도"
+  synosystemctl stop pkgctl-Tailscale.service; sleep 5
+  synosystemctl start pkgctl-Tailscale.service
+  for i in $(seq 1 24); do ip -4 addr show | grep -q '<사설망주소>' && break; sleep 5; done
+fi
+
+echo "result: $(ip -4 -br addr show | grep -i tailscale)"
+echo "=== $(date) done ==="
+```
+
+핵심은 세 가지다.
+
+- **`restart` 대신 `stop` → `start`.** `configure-host` 직후 `restart` 한 번으로는 새 권한이 반영되지 않았다. 유닛 상태가 깨졌을 때(`synopkg status`가 `263 failed to get unit status`) `restart`·`synopkg restart`가 반환하지 않고 매달리는 현상도 겪었다
+- **`/dev/net/tun` 준비를 기다린다.** 작업이 장치 생성보다 먼저 발동할 수 있다
+- **로그를 남긴다.** 남기지 않으면 실패해도 흔적이 없어 재부팅마다 처음부터 추적하게 된다
+
+> ⚠️ **고정 `sleep`으로 순서를 맞추지 않는다.** 짧으면 실패하고 길면 그 시간만큼 서비스가 죽어 있다. 실제로 `sleep 600`을 쓰던 작업이 있었는데, 컨테이너는 부팅 직후에 이미 실패한 뒤였다.
+
+> ⚠️ **원격 작업 시 명령을 세션에서 분리한다.** Tailscale 경유로 접속한 상태에서 서비스를 재시작하면 세션이 끊겨 **뒤의 명령이 실행되지 않는다.** SSH를 외부에 여는 대신 `nohup`으로 떼어낸다.
+>
+> ```sh
+> sudo sh -c 'nohup sh -c "<명령들>" > /tmp/ts-fix.log 2>&1 &'
+> ```
+
+**2026-08-14 검증:** 두 대책 적용 후 재부팅에서 무개입으로 컨테이너 3개 기동, `tailscale0` 복구까지 22초. 재시도 분기는 발동하지 않았다.
 
 ### 8-5. 검증 후 정리
 
@@ -677,6 +767,7 @@ cd <프로젝트> && hk init
 [ ] §8-1 첫 배포 성공 (healthz)                                    ← T11
 [ ] §8-2 기기 토큰 발급 (desktop / macbook)
 [ ] §8-3 push→resume 왕복 + 암호화 확인                            ← T2, D29
+[ ] §8-4 ip_nonlocal_bind=1 (/etc/sysctl.conf) + Tailscale 부팅 작업 ← 없으면 재부팅 시 전멸
 [ ] §8-4 재부팅 후 자동 기동                                       ← T9
 [ ] §8-5 스모크 스레드 close
 [ ] §9   기기별 pipx + config.env + hk setup + hk init             ← T6
