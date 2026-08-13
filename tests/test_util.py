@@ -34,7 +34,8 @@ def test_kst_minute():
 
 
 def test_estimate_tokens():
-    assert estimate_tokens("가나다라마바") == 2  # len//3 (§3-6)
+    assert estimate_tokens("가나다라마바") == 6  # 한글 음절당 1토큰 (§3-6)
+    assert estimate_tokens("abcdefgh") == 2  # 그 외 4자당 1토큰
 
 
 def test_carryover_lines_bullets_and_tables_only():

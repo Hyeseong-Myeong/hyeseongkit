@@ -16,6 +16,7 @@ GUARD = (
 )
 
 OMITTED_NOTE = "(생략됨 — hk resume --budget 0 으로 전체 조회)"
+CARRY_NOTE = "- (이월 이하 생략 — 전량은 볼트 sessions/<thread>.md · hk resume --budget 0)"
 
 _L1_ORDER = ("context", "done", "questions")
 _L1_HEADINGS = {"context": "## 컨텍스트", "done": "## 한 일", "questions": "## 미결 질문"}
@@ -31,6 +32,22 @@ def _decisions_block(decisions: list[dict]) -> str:
             parts.append(f"기각: {d['rejected']}")
         lines.append("- " + " | ".join(p for p in parts if p))
     return "\n".join(lines)
+
+
+def _cap_carryover(lines: list[str], allow: int) -> list[str]:
+    """이월은 최신(앞)부터 예산만큼만 싣는다. 전량은 SSOT와 볼트 파일에 그대로 남는다.
+
+    이월은 push마다 누적되고 L0라 절단 대상이 아니어서, 예산과 무관하게
+    무한 증가하는 유일한 경로였다.
+    """
+    kept: list[str] = []
+    used = 0
+    for line in lines:
+        used += estimate_tokens(line)
+        if used > allow and kept:
+            return kept + [CARRY_NOTE]
+        kept.append(line)
+    return kept
 
 
 def _trim_paragraphs(text: str, over: int) -> tuple[str, int]:
@@ -73,6 +90,8 @@ def build_packet(
     if decisions:
         know_block += "\n### 결정\n" + _decisions_block(decisions) + "\n"
     if carry:
+        if budget > 0:
+            carry = _cap_carryover(carry, budget // 4)
         know_block += "\n### 이월 (자동 보존)\n" + "\n".join(carry) + "\n"
 
     l0_parts = [head, "\n## 할 일\n" + todo + "\n", "\n" + know_block]

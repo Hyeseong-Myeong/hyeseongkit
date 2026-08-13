@@ -70,8 +70,13 @@ def random_slug() -> str:
 
 
 def estimate_tokens(text: str) -> int:
-    """한글 보수 추정 len//3 (§3-6)."""
-    return len(text) // 3
+    """한글은 음절당 ~1토큰, 그 외는 4자당 1토큰 (§3-6).
+
+    len//3은 한글을 3배 과소평가해 예산이 사실상 무력화됐다
+    (실측: budget=2000 패킷이 추정 3,936 · 실토큰 약 5,500).
+    """
+    hangul = sum(1 for c in text if "가" <= c <= "힣")
+    return hangul + (len(text) - hangul) // 4
 
 
 def normalize_ws(line: str) -> str:
